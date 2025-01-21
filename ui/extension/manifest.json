@@ -1,0 +1,34 @@
+{
+    "manifest_version": 2,
+    "name": "LinkedIn Automation Tool",
+    "version": "1.0",
+    "description": "Browser extension for LinkedIn automation with native messaging integration",
+    "permissions": [
+      "activeTab",           
+      "storage",             
+      "nativeMessaging",     
+      "https://*.linkedin.com/*" 
+    ],
+    "browser_action": {
+      "default_popup": "popup.html" 
+    },
+    "background": {
+      "scripts": ["background.js"],
+      "persistent": false  
+    },
+    "content_scripts": [
+      {
+        "matches": ["https://*.linkedin.com/*"],
+        "js": ["content_script.js"]
+      }
+    ],
+    
+    "options_ui": {
+      "page": "options.html",
+      "open_in_tab": true
+    },
+    "externally_connectable": {
+      "ids": ["*"]
+    }
+  }
+  

@@ -1,0 +1,9 @@
+{
+  "name": "com.linkedin.automation",
+  "description": "LinkedIn Automation Native Messaging Host",
+  "path": "PATH_TO_YOUR_PYTHON_EXECUTABLE",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://YOUR_EXTENSION_ID/"
+  ]
+} 

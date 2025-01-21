@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LinkedIn Automation Settings</title>
+    <style>
+        body {
+            width: 100%;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        .option-group {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .option-group h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        label {
+            display: block;
+            margin: 10px 0;
+        }
+        input[type="checkbox"] {
+            margin-right: 10px;
+        }
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #0077b5;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #006097;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h2>LinkedIn Automation Settings</h2>
+    
+    <div class="option-group">
+        <h3>Automation Preferences</h3>
+        <label>
+            <input type="checkbox" id="autoScan">
+            Automatically scan job pages when opened
+        </label>
+        <label>
+            <input type="checkbox" id="notifications">
+            Enable desktop notifications
+        </label>
+    </div>
+
+    <div class="option-group">
+        <h3>Job Search Preferences</h3>
+        <label>
+            Minimum job match score (%)
+            <input type="number" id="minMatchScore" min="0" max="100" value="70">
+        </label>
+        <label>
+            Maximum jobs to process per session
+            <input type="number" id="maxJobs" min="1" value="50">
+        </label>
+    </div>
+
+    <div class="option-group">
+        <h3>API Configuration</h3>
+        <label>
+            API Endpoint
+            <input type="text" id="apiEndpoint" placeholder="http://localhost:5000">
+        </label>
+    </div>
+
+    <button id="save">Save Settings</button>
+    <div id="status" class="status"></div>
+
+    <script src="options.js"></script>
+</body>
+</html> 

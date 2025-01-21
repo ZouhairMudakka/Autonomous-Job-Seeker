@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LinkedIn Automation</title>
+    <style>
+        body {
+            width: 300px;
+            padding: 10px;
+            font-family: sans-serif;
+        }
+        .button {
+            width: 100%;
+            margin: 5px 0;
+            padding: 8px;
+            background-color: #0077b5; /* LinkedIn Blue */
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+        }
+        .button:hover {
+            background-color: #005c8c;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            word-wrap: break-word;
+        }
+        .stats {
+            font-size: 0.9em;
+            color: #666;
+        }
+        #runtime {
+            font-family: monospace;
+            text-align: center;
+        }
+        h2 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <h2>LinkedIn Automation</h2>
+
+    <!-- Primary status indicator -->
+    <div class="status" id="status">Not connected</div>
+    
+    <!-- Displays current runtime -->
+    <div class="status" id="runtime">--:--:--</div>
+    
+    <!-- Displays stats or other info (optional) -->
+    <div class="status stats" id="stats"></div>
+    
+    <!-- Buttons row -->
+    <button class="button" id="startBtn">Start Automation</button>
+    <button class="button" id="pauseBtn">Pause</button>
+    <button class="button" id="stopBtn">Stop Automation</button>
+    <button class="button" id="settingsBtn">Settings</button>
+
+    <script src="popup.js"></script>
+</body>
+</html>
