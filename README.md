@@ -189,4 +189,95 @@ To verify the integrity of the LICENSE file:
    Copyright [2025] Mudakka Consulting FZ-LLC
    ```
 4. You can verify the license text matches the official Apache License 2.0 by comparing with:
-   https://www.apache.org/licenses/LICENSE-2.0.txt 
+   https://www.apache.org/licenses/LICENSE-2.0.txt
+
+### AI Architecture
+
+#### Autonomy Levels
+1. **Basic Automation** (Current)
+   - Systematic approach to job search and application
+   - Pre-defined patterns and workflows
+   - Direct user control for major decisions
+
+2. **Enhanced Pattern Recognition** (Next)
+   - Learning from successful interactions
+   - Basic decision-making capabilities
+   - Systematic approaches as primary fallback
+
+3. **Guided Autonomy** (Short-term)
+   - Natural language instruction processing
+   - Context-aware decision making
+   - Proactive error prevention
+   - Systematic approaches as secondary fallback
+
+4. **Full Autonomy** (Long-term)
+   - Independent strategy formulation
+   - Self-optimizing workflows
+   - Predictive problem solving
+   - Systematic approaches as last resort
+
+#### Progressive AI Enhancement
+1. **Intelligent Decision Making**
+   - Natural language understanding
+   - Context-aware actions
+   - Learning from past interactions
+   - Autonomous strategy adjustment
+   - Self-diagnostic capabilities
+   - Confidence scoring for actions
+
+2. **Deep Learning Integration**
+   - Obstacle pattern recognition
+   - Adaptive navigation strategies
+   - Problem-solving evolution
+   - Historical success analysis
+   - Continuous learning pipeline
+
+3. **Smart Application Strategy**
+   - Autonomous application decisions
+   - Intelligent form filling
+   - Dynamic response generation
+   - Self-improving success rates
+   - Confidence-based fallback triggers
+
+4. **Intelligent Engagement**
+   - Smart recruiter interaction
+   - Context-aware company engagement
+   - Autonomous follow-up planning
+   - Strategic relationship building
+   - Engagement success prediction
+
+5. **Adaptive Error Recovery**
+   - Self-diagnostic capabilities
+   - Autonomous problem resolution
+   - Dynamic fallback strategy selection
+   - Progressive learning from errors
+   - Confidence-based approach selection
+
+6. **User Preference Learning**
+   - Natural language preference understanding
+   - Dynamic strategy adaptation
+   - Learning from user feedback
+   - Autonomous preference refinement
+   - Preference-confidence mapping
+
+#### Implementation Strategy
+1. **Progressive Enhancement**
+   - Start with robust systematic approaches as foundation
+   - Gradually layer AI capabilities on top
+   - Maintain systematic approaches as reliable fallbacks
+   - Continuous learning and improvement
+   - Confidence threshold monitoring
+
+2. **Fallback Mechanism**
+   - AI-first approach for all operations
+   - Monitoring of AI performance and decisions
+   - Confidence score evaluation
+   - Graceful degradation to systematic approaches
+   - Learning from fallback incidents
+
+3. **Learning Pipeline**
+   - Obstacle pattern database
+   - Solution strategy evolution
+   - Success rate tracking
+   - Automated strategy refinement
+   - Confidence score calibration 
