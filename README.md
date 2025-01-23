@@ -32,6 +32,7 @@ This system uses multiple specialized AI agents to:
   - `job_match_utils.py`: Job matching and scoring
   - `model_utils.py`: Model serialization/deserialization
   - `regex_utils.py`: Regex patterns and text extraction
+  - `confidence_scorer.py`: AI confidence scoring and threshold management
   - `text_cleaning.py`: Text normalization and cleaning
 
 - `models/`: Data models and validation
@@ -98,6 +99,8 @@ This system uses multiple specialized AI agents to:
   - Qualification matching
   - Success probability scoring
   - Automated customization suggestions
+  - Confidence-based navigation (pending)
+  - Learning pipeline integration (pending)
 
 - Application Management
   - Status tracking dashboard
@@ -118,6 +121,25 @@ This system uses multiple specialized AI agents to:
 - Browser extension dashboard
 - Real-time monitoring
 - Application analytics
+
+### Planned Extensions
+- Automated CV Parsing
+  - Multi-format support (PDF, DOCX, TXT)
+  - GPT-enhanced field extraction
+  - Structured data validation
+  - Skills and experience mapping
+
+- Enhanced Profile Management
+  - Multi-CV support
+  - Dynamic profile updates
+  - Platform-specific optimizations
+  - Automated profile scoring
+
+- Unified Data Architecture
+  - Centralized storage system
+  - Cross-platform data sync
+  - Analytics and reporting
+  - Migration path to cloud/DB
 
 ## Requirements
 
@@ -153,13 +175,16 @@ Current implementation focuses on:
 Pending activation:
 - AI Navigator with confidence scoring
 - Learning pipeline integration
+- GPT-based confidence scoring
+- Unified AI logging system
 
-Planned extensions:
-- Automated CV parsing
-- User profile management
-- Enhanced data storage
-- Unified utilities
-- Platform-specific login flows
+Planned Phase 2 (Post-MVP):
+- Docker & Cloud Migration
+- SQL/NoSQL Database
+- Platform Expansion (Indeed, Glassdoor)
+- Chrome Extension & Real-Time Monitoring
+- Advanced AI Features
+- API Endpoints & Security
 
 ## Setup
 1. Clone the repository
