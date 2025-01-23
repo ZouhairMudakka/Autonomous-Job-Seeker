@@ -1,3 +1,17 @@
+"""
+AI-driven navigation with confidence scoring.
+
+NOTE: THIS MODULE IS CURRENTLY PENDING ACTIVATION
+Status: Inactive - Awaiting configuration and integration
+Requirements before activation:
+- Learning pipeline setup
+- Confidence scoring calibration
+- Error handling integration
+- Performance monitoring setup
+
+Do not import or use this module until proper configuration is complete.
+"""
+
 class AINavigator:
     def __init__(self, min_confidence=0.8, max_retries=3):
         self.min_confidence = min_confidence
