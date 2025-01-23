@@ -34,11 +34,13 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 import threading
+from utils.telemetry import TelemetryManager
 
 class MinimalGUI:
     def __init__(self, controller):
         """Initialize the GUI with a reference to the automation controller."""
         self.controller = controller
+        self.telemetry = TelemetryManager(controller.settings)
 
         # Add background event loop setup
         self.loop = asyncio.new_event_loop()
@@ -167,6 +169,7 @@ class MinimalGUI:
 
     async def start_automation(self):
         """Start the automation process."""
+        await self.telemetry.track_gui_interaction("click", "Start Automation")
         self.log_to_console("Start button pressed. Attempting to start session.")
         self.is_running = True
         self.is_paused = False
@@ -189,6 +192,7 @@ class MinimalGUI:
 
     async def pause_automation(self):
         """Pause/Resume the automation."""
+        await self.telemetry.track_gui_interaction("click", "Pause")
         self.log_to_console("Pause/Resume button pressed.")
         self.is_paused = not self.is_paused
         status = "Paused" if self.is_paused else "Running"
@@ -214,6 +218,7 @@ class MinimalGUI:
 
     async def stop_automation(self):
         """Stop the automation process."""
+        await self.telemetry.track_gui_interaction("click", "Stop")
         self.log_to_console("Stop button pressed. Stopping session.")
         self.is_running = False
         self.is_paused = False
@@ -328,6 +333,22 @@ class MinimalGUI:
     def stop_automation_command(self):
         """GUI button callback that schedules stop_automation in the background."""
         self.run_coroutine_in_background(self.stop_automation())
+
+    async def on_button_click(self, button_name):
+        await self.telemetry.track_gui_interaction("click", button_name)
+        # ... existing code ...
+
+    async def on_start_button_click(self):
+        await self.telemetry.track_gui_interaction('click', 'start_button')
+        # ... existing code ...
+
+    async def on_stop_button_click(self):
+        await self.telemetry.track_gui_interaction('click', 'stop_button')
+        # ... existing code ...
+
+    async def on_settings_change(self, setting_name, new_value):
+        await self.telemetry.track_gui_interaction('settings_change', setting_name)
+        # ... existing code ...
 
 # Additional comment about possibly splitting the code into a ui/components/ folder
 # if the GUI grows with multiple custom widgets or advanced config tabs.

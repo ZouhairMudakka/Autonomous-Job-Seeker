@@ -35,6 +35,7 @@ import sys
 import asyncio
 from datetime import datetime
 import shlex
+from utils.telemetry import TelemetryManager
 
 class CLI(cmd.Cmd):
     intro = 'Welcome to the LinkedIn Automation MVP. Type help or ? to list commands.\n'
@@ -43,16 +44,18 @@ class CLI(cmd.Cmd):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
+        self.telemetry = TelemetryManager(controller.settings)
 
     # -------------------------------------------------------------------------
     # Commands
     # -------------------------------------------------------------------------
 
-    def do_start(self, arg):
+    async def do_start(self, arg):
         """
         Start a new automation session.
         For an MVP, we wrap the async controller.start_session() call using asyncio.run.
         """
+        await self.telemetry.track_cli_command("start", {"args": arg})
         try:
             # If controller.start_session() is async, we do:
             asyncio.run(self.controller.start_session())
@@ -70,11 +73,12 @@ class CLI(cmd.Cmd):
         except Exception as e:
             print(f"Error ending session: {str(e)}")
 
-    def do_status(self, arg):
+    async def do_status(self, arg):
         """
         Show current automation status from tracker_agent logs.
         Because tracker_agent log_activity is async, we wrap get_activities in an async call, too.
         """
+        await self.telemetry.track_cli_command('status')
         # We'll define an inline async function to fetch logs, then run it:
         async def fetch_logs():
             # If your tracker_agent.get_activities is synchronous, just call it directly.
@@ -149,6 +153,11 @@ class CLI(cmd.Cmd):
         except Exception as e:
             print(f"Error ending session: {str(e)}")
         return True
+
+    async def do_config(self, args):
+        """Update preferences."""
+        await self.telemetry.track_cli_command('config', {'args': args})
+        # ... existing code ...
 
     def default(self, line):
         print(f"Unknown command: {line}")

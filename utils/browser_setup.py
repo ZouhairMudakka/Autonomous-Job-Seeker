@@ -23,6 +23,7 @@ import platform
 import os
 import logging
 import inspect
+from utils.telemetry import TelemetryManager
 
 class BrowserSetup:
     # Default paths for different browsers based on OS
@@ -67,6 +68,7 @@ class BrowserSetup:
                 }
         """
         self.settings = settings.get('browser', {})
+        self.telemetry = TelemetryManager(settings)
 
         # Determine data directory
         data_dir = (
@@ -258,16 +260,31 @@ class BrowserSetup:
                 page = await browser.new_page()
                 self._log_info("Attached successfully, created new page.")
                 await self._configure_page(page)
+                await self.telemetry.track_browser_setup(
+                    browser_type=self.browser_type,
+                    headless=self.headless,
+                    success=True
+                )
                 return browser, page
 
             # Otherwise, launch a persistent context (no incognito)
             if self.browser_type == 'firefox':
                 context, page = await self._launch_firefox_persistent(playwright)
                 await self._configure_page(page)
+                await self.telemetry.track_browser_setup(
+                    browser_type=self.browser_type,
+                    headless=self.headless,
+                    success=True
+                )
                 return context, page
             elif self.browser_type in ['edge', 'chrome']:
                 context, page = await self._launch_chromium_persistent(playwright)
                 await self._configure_page(page)
+                await self.telemetry.track_browser_setup(
+                    browser_type=self.browser_type,
+                    headless=self.headless,
+                    success=True
+                )
                 return context, page
             else:
                 raise ValueError(f"Unsupported browser type: {self.browser_type}")
@@ -275,6 +292,12 @@ class BrowserSetup:
         except Exception as e:
             self._log_info(f"Browser initialization failed: {e}")
             await playwright.stop()
+            await self.telemetry.track_browser_setup(
+                browser_type=self.browser_type,
+                headless=self.headless,
+                success=False,
+                error=str(e)
+            )
             raise
 
     async def _configure_page(self, page: Page):

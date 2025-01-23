@@ -61,10 +61,14 @@ AI Browser Job Workflow/
 │   ├── job_match_utils.py   # Job matching and scoring
 │   ├── model_utils.py       # Model serialization/deserialization
 │   ├── regex_utils.py       # Regex patterns and text extraction
+│   ├── telemetry.py        # System telemetry and performance tracking
 │   └── text_cleaning.py     # Text normalization and cleaning
 │
 ├── data/                # Data storage and persistence
 │   ├── activity_log.csv      # Automation activity logging
+│   ├── telemetry/            # Telemetry data storage
+│   │   ├── events/          # Telemetry event logs
+│   │   └── metrics/         # Performance metrics
 │   └── cookies/             # Browser cookie storage
 │       ├── browser_cookies.json  # Saved browser cookies
 │       └── cookies.json         # Application cookies
