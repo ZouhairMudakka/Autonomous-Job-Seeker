@@ -7,87 +7,91 @@ This **comprehensive roadmap** combines and refines all previous planning and di
 ## Core Principles
 
 1. **AI-First Approach**  
-   - **Default to AI-driven** decisions and automation.  
-   - Systematic methods act as a **reliable fallback** if the AI’s confidence is low or if critical errors occur.
+   - Default to **AI-driven** decisions and automation.  
+   - Systematic methods serve as a **reliable fallback** if the AI's confidence is too low or if errors occur.
 
 2. **Confidence-Based Actions**  
-   - Each AI step (navigating, form-filling, job matching) uses **confidence scores** to decide whether to proceed or revert to fallback/human intervention.  
-   - Over time, confidence thresholds adapt through **continuous learning**.
+   - Each AI step (navigation, form-filling, job matching) uses **confidence scores** to decide whether to proceed or revert to fallback or human intervention.  
+   - Over time, the AI adjusts confidence thresholds based on **learning** from real-world performance.
 
 3. **Continuous Learning**  
-   - A **learning pipeline** logs successes/failures, obstacles, and solutions.  
-   - Models or heuristics get periodically refined based on real-world performance.
+   - A **learning pipeline** logs successes/failures, obstacles, solutions, and performance metrics.  
+   - Models or heuristic logic get updated regularly.
 
 4. **Minimal Human Intervention**  
-   - Aim for **autonomous operation** with rare need for manual input (e.g., complex CAPTCHAs or extreme fallback).  
-   - Over time, reduce these interventions to only unusual or brand-new scenarios.
+   - Aim for **autonomous operation** with rare manual input (e.g., complex CAPTCHAs).  
+   - Over time, reduce interventions to only corner cases or new, untested scenarios.
 
 5. **SaaS Integration**  
-   - Architect the system so it can **migrate to cloud** services.  
-   - Provide an **API or microservices** layer for user profiles, logs, and advanced features.  
-   - Use Docker or similar to run multiple concurrent sessions for different users.
+   - Design the system for **eventual migration** to the cloud.  
+   - Provide an **API/microservices** layer for user data, logs, and advanced features.  
+   - Run multiple concurrent user sessions via Docker or similar tooling.
 
 6. **Focus on User Experience**  
-   - A **Chrome extension** for user interaction, capable of live monitoring.  
-   - **Headless mode** to run in the background, plus an **interactive mode** for real-time user control.  
-   - Provide easy ways to override, instruct, or customize the AI.
+   - Develop a **Chrome extension** for real-time user interaction and monitoring.  
+   - **Headless mode** for background operation, **interactive mode** if users want to see or override decisions.  
+   - Provide quick ways for users to instruct or customize AI decisions.
 
 ---
 
-## Phase 1: **Immediate / MVP Enhancement & SaaS Readiness** 
+## Reordered Top 5 Priorities (Immediate / MVP)
 
-> **Target**: **Next Week**  
-> **Goal**: Deliver a fully functional MVP with a strong AI core, advanced CV parsing, and systematic fallback—ready for *initial* SaaS integration.
+1. **AI-Driven Navigation & Error Handling**  
+   - Use GPT or heuristic-based logic to decide how to click, scroll, or fill fields.  
+   - Implement robust error recovery (self-diagnostics, re-check changed DOM selectors, fallback if too many failures).  
+   - Respect rate limits, random delays, handle CAPTCHAs, and unify existing scripts into AI-oriented flows.
 
-### Key Features & Tasks
+2. **Confidence Scoring (Baseline)**  
+   - Introduce a numeric or float-based confidence metric for steps like job matching, form-filling, or navigation.  
+   - Map confidence outcomes: high => proceed, medium => maybe re-check, low => fallback or error out.  
+   - Log successes/failures to refine future thresholds.
 
-1. **Enhanced AI Core**  
-   - **Confidence Scoring**: Implement a baseline confidence system for all major AI actions (job search decisions, form-filling, error handling, etc.).  
-   - **Learning Pipeline**: Establish a basic pipeline to log each obstacle, store solutions, track success metrics, and calibrate confidence.  
-   - **AI-Driven Navigation**: Refactor existing LinkedIn flows to prefer AI logic (DOM analysis, GPT-based decisions) and only use systematic “pre-scripted” flows when confidence is insufficient.  
-   - **Adaptive Error Handling**:  
-     - Introduce **self-diagnostic** checks (e.g., re-checking changed selectors, verifying new DOM states).  
-     - Enable **error-driven learning**: record the error type, retry with alternative strategies.  
+3. **Core MVP Form Filling & CV Parsing**  
+   - Finalize PDF/text parsing, store structured data (skills, experience, etc.).  
+   - Seamlessly fill LinkedIn job forms (uploading CV, answering questions).  
+   - Refine GPT-based cover letter generation with retry logic or user fallback.
 
-2. **Core MVP Functionality**  
-   - **Automated CV Parsing**:  
-     - Finalize **PDF/text extraction** (with docx or txt as placeholders if time permits).  
-     - Validate structured data (skills, education, experience).  
-     - Seamless integration with job application forms (autofilling user data).  
-   - **LinkedIn Automation**:  
-     - Complete robust job search & apply flow (AI-first).  
-     - Respect rate limits, random delays, and CAPTCHAs.  
-   - **Smart Form Filling**:  
-     - Fine-tune GPT-4o cover letter generation with retry logic, or fallback to user input if repeated failures.  
-     - Detect disqualifying questions, answer or skip as needed.  
-   - **User Profile Management**:  
-     - Centralize profile data (CSV or JSON for now), including preferences, CV path, etc.  
-     - Provide basic validation (e.g., email format, phone format).  
-   - **Unified Data Storage**:  
-     - Consolidate random CSV/JSON usage into a **consistent** approach.  
-     - Document how we’ll eventually migrate to SQL/NoSQL.  
+4. **Unified Data Storage & Logging**  
+   - Decide on a single approach (CSV or JSON) for user profiles, logs, job data, and unify it across agents.  
+   - Document a plan for Phase 2 DB migration.
 
-3. **Systematic Fallbacks**  
-   - **Keep the existing code** for systematic job search as a fallback.  
-   - Shift the main logic to the new AI-based modules, but gracefully degrade if confidence or AI fails.
+5. **Minimal SaaS Prep & Documentation**  
+   - Clarify environment variables for cloud usage.  
+   - Potentially create minimal API stubs for reading/writing user data.  
+   - Update docstrings (e.g., in `credentials_agent`) and ensure overall code is well-documented.
 
-4. **SaaS Integration (Initial Steps)**  
-   - Prepare for **cloud-based** usage:  
-     - Clarify environment variables and secure secrets.  
-     - Possibly create placeholders for API endpoints to store user/app data.  
+> **Target Timeline**: 1-2 weeks for a testable MVP that can autonomously apply for jobs on LinkedIn, using AI-based navigation and a baseline confidence system.
 
-5. **Basic Analytics & CLI Enhancements**  
-   - Track app metrics, success rates, search stats in `tracker_agent` or a new module.  
-   - Refine the CLI to support flexible testing while the Chrome extension is being planned.
+---
 
-6. **Documentation**  
-   - Update all docstrings, especially around `attach_mode` in `credentials_agent.py`.  
-   - Provide instructions for new AI-first features.
+## Phase 1 (MVP Enhancement & SaaS Readiness)
 
-### Timeline & Status
+### Key Goals & Deliverables
+- A **stable codebase** applying to LinkedIn with minimal human guidance.
+- AI-driven flows with fallback, error diagnostics, and consistent storage.
+- Basic readiness for future SaaS connection.
 
-- **Completion**: Targeting **within the next week** for a testable MVP.  
-- **Deliverable**: A stable codebase that can autonomously apply to LinkedIn jobs, parse CVs, store basic logs, and adapt errors via a minimal confidence-based system.
+### Tasks (Expanded)
+1. **AI-Driven Navigation & Confidence**  
+   - Convert existing systematic steps into AI-based logic.  
+   - Insert confidence checks at major steps.  
+   - Provide a fallback if confidence is low or repeated errors occur.
+
+2. **Enhanced Error Handling**  
+   - Self-diagnostic checks if DOM changes or a step times out.  
+   - Possibly record new or repeated errors in the learning pipeline.
+
+3. **CV Parsing & Form Filling**  
+   - Ensure PDF or text-based CV parsing is robust, ideally do docx if time allows.  
+   - Finalize GPT-4o cover letter generation, handle disqualifying questions.
+
+4. **Unified Data Storage**  
+   - Merge CSV/JSON usage into one consistent approach.  
+   - Document a plan for Phase 2 DB migration.
+
+5. **Documentation & SaaS Prep**  
+   - Clean docstrings and environment variable usage.  
+   - Possibly add placeholders or a minimal API client to facilitate near-future SaaS integration.
 
 ---
 
@@ -111,8 +115,8 @@ This **comprehensive roadmap** combines and refines all previous planning and di
    - Each platform may have unique flows, but re-use the AI approach (confidence scoring, fallback, structured form-filling).
 
 4. **Chrome Extension Development**  
-   - **Front-End**: Provide real-time or near-real-time updates to the user about the AI’s current activity.  
-   - **Interaction**: Let users instruct the AI mid-flow (e.g., “Stop after 10 apps,” “Switch CV,” “Skip this job,” etc.).  
+   - **Front-End**: Provide real-time or near-real-time updates to the user about the AI's current activity.  
+   - **Interaction**: Let users instruct the AI mid-flow (e.g., "Stop after 10 apps," "Switch CV," "Skip this job," etc.).  
    - Possibly use **web sockets** or an HTTP-based microservice to sync the extension with the AI.
 
 5. **User Interaction Modes**  
@@ -168,8 +172,8 @@ This **comprehensive roadmap** combines and refines all previous planning and di
 
 4. **Preference Learning**  
    - The AI interprets user instructions in **natural language**.  
-   - Learns from user feedback (e.g., “I didn’t like that approach” -> adjusts confidence or approach next time).  
-   - Over time, it automatically adjusts “target job” preferences, location filters, or salary expectations.
+   - Learns from user feedback (e.g., "I didn't like that approach" -> adjusts confidence or approach next time).  
+   - Over time, it automatically adjusts "target job" preferences, location filters, or salary expectations.
 
 5. **Advanced Analytics**  
    - Market trend analysis for job opportunities.  
@@ -190,7 +194,7 @@ This **comprehensive roadmap** combines and refines all previous planning and di
 ## Already Implemented (At MVP Start)
 
 - **Basic LinkedIn Automation**  
-  - Job search, filtering, “Easy Apply” detection, session mgmt, etc.
+  - Job search, filtering, "Easy Apply" detection, session mgmt, etc.
 - **Systematic Navigation**  
   - Pre-defined workflows, error handling, CSV logging, fallback approach.
 - **CV Parsing (Partial)**  
@@ -277,7 +281,7 @@ This document describes **how the overall product ecosystem** will function once
    - **User Login**: The extension allows the user to log in with their SaaS credentials and verifies subscription or credit balance.  
    - **Real-Time Interaction**:  
      - Users can **chat** with the AI to redefine goals or set constraints.  
-     - Receives **live updates** describing the AI’s actions and progress.  
+     - Receives **live updates** describing the AI's actions and progress.  
    - **GUI Controls**: Start/stop the AI, choose job preferences, set custom instructions, watch live stats.
 
 ---
@@ -323,7 +327,7 @@ This document describes **how the overall product ecosystem** will function once
 
 2. **WebSockets / Live Logs**  
    - The AI sends real-time messages to the SaaS or extension:  
-     - *“Searching Indeed for ‘Software Engineer’ in London…”*  
+     - *"Searching Indeed for 'Software Engineer' in London..."*  
    - Users can watch or let it run in the background.
 
 3. **Auth & Permissions**  
@@ -340,13 +344,13 @@ This document describes **how the overall product ecosystem** will function once
 
 2. **Real-Time Interaction**  
    - Chat interface lets the user give instructions:  
-     - *“Stop after 10 apps.”*  
-     - *“Focus on remote roles only.”*  
+     - *"Stop after 10 apps."*  
+     - *"Focus on remote roles only."*  
    - Extension relays these instructions to the AI, which adjusts thresholds or strategies.
 
 3. **Live Status Feed**  
    - Receives streaming text updates from the AI:  
-     - *“Applying to LinkedIn job: Senior Data Scientist, confidence=0.92.”*  
+     - *"Applying to LinkedIn job: Senior Data Scientist, confidence=0.92."*  
    - User can see or ignore as desired.
 
 4. **Local vs. Cloud Execution**  
@@ -391,7 +395,7 @@ This document describes **how the overall product ecosystem** will function once
    - Users can track success rates and retrieve past data.
 
 2. **Seamless UX**  
-   - Log in to the extension, click Start, define job criteria, and watch the AI’s actions.
+   - Log in to the extension, click Start, define job criteria, and watch the AI's actions.
 
 3. **Billing & Tokens**  
    - Each action or batch of applications can consume credits.  

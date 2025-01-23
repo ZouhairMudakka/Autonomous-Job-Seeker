@@ -79,6 +79,7 @@ nosetests.xml
 # Documentation
 docs/_build/
 site/
+ROADMAP.md
 
 # Jupyter Notebook
 .ipynb_checkpoints
