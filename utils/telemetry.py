@@ -3,7 +3,7 @@ Telemetry Module for tracking system performance and usage.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -135,3 +135,94 @@ class TelemetryManager:
 
         except Exception as e:
             self.logger.error(f"Failed to store telemetry event: {e}") 
+
+    async def load_events(self, date_str: str = None) -> List[Dict]:
+        """Load events for a specific date or all dates."""
+        events = []
+        events_dir = self.storage_path / "events"
+        
+        try:
+            if date_str:
+                # Load specific date
+                event_file = events_dir / f"events_{date_str}.json"
+                if event_file.exists():
+                    with event_file.open('r') as f:
+                        events = json.load(f)
+            else:
+                # Load all dates
+                for event_file in events_dir.glob("events_*.json"):
+                    with event_file.open('r') as f:
+                        events.extend(json.load(f))
+            
+            return events
+        except Exception as e:
+            self.logger.error(f"Failed to load events: {e}")
+            return []
+
+    async def get_analytics(self, start_date: str = None, end_date: str = None) -> Dict:
+        """Generate analytics from telemetry data."""
+        events = await self.load_events()
+        
+        analytics = {
+            'total_events': len(events),
+            'success_rate': 0,
+            'event_types': {},
+            'confidence_scores': {
+                'average': 0,
+                'by_type': {}
+            },
+            'errors': []
+        }
+
+        if not events:
+            return analytics
+
+        # Calculate statistics
+        successful = sum(1 for e in events if e['success'])
+        analytics['success_rate'] = successful / len(events)
+
+        # Group by event type
+        for event in events:
+            event_type = event['event_type']
+            if event_type not in analytics['event_types']:
+                analytics['event_types'][event_type] = 0
+            analytics['event_types'][event_type] += 1
+
+            # Track confidence scores
+            if event['confidence_score'] is not None:
+                if event_type not in analytics['confidence_scores']['by_type']:
+                    analytics['confidence_scores']['by_type'][event_type] = []
+                analytics['confidence_scores']['by_type'][event_type].append(
+                    event['confidence_score']
+                )
+
+            # Track errors
+            if not event['success'] and event['data'].get('error'):
+                analytics['errors'].append({
+                    'timestamp': event['timestamp'],
+                    'type': event_type,
+                    'error': event['data']['error']
+                })
+
+        # Calculate average confidence scores
+        all_scores = [
+            score for scores in analytics['confidence_scores']['by_type'].values()
+            for score in scores
+        ]
+        if all_scores:
+            analytics['confidence_scores']['average'] = sum(all_scores) / len(all_scores)
+
+        return analytics
+
+    async def export_metrics(self, analytics: Dict):
+        """Export analytics to metrics file."""
+        try:
+            metrics_dir = self.storage_path / "metrics"
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            metrics_file = metrics_dir / f"metrics_{date_str}.json"
+            
+            with metrics_file.open('w') as f:
+                json.dump(analytics, f, indent=2)
+                
+        except Exception as e:
+            self.logger.error(f"Failed to export metrics: {e}") 
