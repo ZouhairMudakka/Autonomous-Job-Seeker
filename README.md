@@ -13,133 +13,50 @@ This system uses multiple specialized AI agents to:
 
 ## Project Structure
 
-### AI Agents (`agents/`)
-- `credentials_agent.py`: CAPTCHA handling and authentication management
-- `form_filler_agent.py`: Intelligent form completion
-- `general_agent.py`: Common browser automation functions
-- `linkedin_agent.py`: LinkedIn-specific operations
-- `tracker_agent.py`: Application status tracking
-- `user_profile_agent.py`: User data management
-- `ai_navigator.py`: AI-driven navigation with confidence scoring (pending activation)
-
-### Core Components
-- `utils/`: Shared utilities
-  - `application_utils.py`: Application tracking utilities
-  - `browser_setup.py`: Browser initialization and configuration
-  - `cv_utils.py`: CV/Resume data processing
-  - `data_export_utils.py`: Data export and reporting
-  - `document_processor.py`: PDF/DOCX/TXT processing
-  - `job_match_utils.py`: Job matching and scoring
-  - `model_utils.py`: Model serialization/deserialization
-  - `regex_utils.py`: Regex patterns and text extraction
-  - `confidence_scorer.py`: AI confidence scoring and threshold management
-  - `text_cleaning.py`: Text normalization and cleaning
-
-- `models/`: Data models and validation
-  - `application_models.py`: Application lifecycle and status tracking
-  - `cv_models.py`: CV/Resume data structures
-  - `job_models.py`: Job details and matching
-  - `user_models.py`: User profile data structures
-
-- `config/`: Configuration management
-  - `settings.py`: System configuration and environment setup
-
-- `orchestrator/`: Workflow management
-  - `controller.py`: Main workflow orchestration
-  - `task_manager.py`: Task queuing and execution
-
-- `storage/`: Data persistence
-  - `csv_storage.py`: CSV data management
-  - `logs_manager.py`: Logging functionality
-  - `learning_pipeline.py`: AI learning and performance tracking
-
-### Data Storage (`data/`)
-- `activity_log.csv`: Automation activity logging
-- `cookies/`: Browser cookie storage
-  - `browser_cookies.json`: Saved browser cookies
-  - `cookies.json`: Application cookies
-
-### User Interface (`ui/`)
-- `cli.py`: Command-line interface
-- `minimal_gui.py`: Simple desktop GUI implementation
-- `extension/`: Browser extension
-  - `manifest.json`: Extension configuration
-  - `background.js`: Background processes
-  - `content.js`: Content scripts
-  - `linkedin_automation_host.json`: Native messaging config
-  - `options.html/js`: Settings page
-  - `popup.html/js`: Extension popup
+For a detailed view of the project's directory structure and file organization, see [DIRECTORY_STRUCTURE.md](DIRECTORY_STRUCTURE.md)
 
 ## Features
 
-### Core Functionality
-- Job Search Automation
-  - Customizable search criteria
-  - Keyword and skill matching
-  - Location-based filtering
-  - Seniority level targeting
-  - Industry and company type filtering
+### Currently Active
+- Basic LinkedIn Automation
+  - Job search and filtering
+  - "Easy Apply" detection
+  - Session management
+- CV & Document Processing
+  - PDF parsing
+  - Basic field extraction
+  - Cover letter generation (GPT-4)
+- System Infrastructure
+  - CSV/JSON-based storage
+  - Logging functionality
+  - Human-like delays
+  - Concurrency safety
 
-- Application Processing
-  - Resume and cover letter customization
-  - Form auto-completion
-  - Document upload handling
-  - Follow-up tracking
-  - Application status monitoring
+### Pending Activation (Phase 1)
+- AI-Driven Navigation
+  - Confidence-based actions
+  - Self-diagnostic error handling
+  - Learning pipeline integration
+- Enhanced Form Filling
+  - AI-powered field detection
+  - Smart validation
+  - Automated retries
 
-- Profile Optimization
-  - Keyword optimization
-  - Skills matching
-  - Experience highlighting
-  - Profile visibility management
+### Future Roadmap
+- Phase 2 (Post-MVP)
+  - Cloud/SaaS Integration
+  - Multi-Platform Support
+  - Chrome Extension
+  - Database Implementation
+  - Advanced AI Features
 
-### Advanced Features
-- AI-Powered Analysis
-  - Job requirement analysis
-  - Qualification matching
-  - Success probability scoring
-  - Automated customization suggestions
-  - Confidence-based navigation (pending)
-  - Learning pipeline integration (pending)
+- Phase 3 (Long-term)
+  - Full Autonomy System
+  - Intelligent Engagement
+  - Advanced Analytics
+  - Enterprise Solutions
 
-- Application Management
-  - Status tracking dashboard
-  - Application history
-  - Interview scheduling
-  - Follow-up reminders
-  - Analytics and insights
-
-### Security & Compliance
-- Secure credential storage
-- Rate limiting and throttling
-- Platform compliance monitoring
-- Error recovery and resilience
-- CAPTCHA detection and handling
-
-### User Interfaces
-- Command-line interface (CLI)
-- Browser extension dashboard
-- Real-time monitoring
-- Application analytics
-
-### Planned Extensions
-- Automated CV Parsing
-  - Multi-format support (PDF, DOCX, TXT)
-  - GPT-enhanced field extraction
-  - Structured data validation
-  - Skills and experience mapping
-
-- Enhanced Profile Management
-  - Multi-CV support
-  - Dynamic profile updates
-  - Platform-specific optimizations
-  - Automated profile scoring
-
-- Unified Data Architecture
-  - Centralized storage system
-  - Cross-platform data sync
-  - Analytics and reporting
-  - Migration path to cloud/DB
+For a detailed development roadmap and timeline, see [ROADMAP.md](ROADMAP.md)
 
 ## Requirements
 
@@ -164,27 +81,6 @@ This system uses multiple specialized AI agents to:
 - tokencost (Token tracking)
 - hatch (Build tool)
 - pytest-asyncio (Async testing)
-
-## MVP Status
-Current implementation focuses on:
-- CAPTCHA handling (2captcha + manual fallback)
-- Basic browser automation
-- LinkedIn job search
-- Form filling assistance
-
-Pending activation:
-- AI Navigator with confidence scoring
-- Learning pipeline integration
-- GPT-based confidence scoring
-- Unified AI logging system
-
-Planned Phase 2 (Post-MVP):
-- Docker & Cloud Migration
-- SQL/NoSQL Database
-- Platform Expansion (Indeed, Glassdoor)
-- Chrome Extension & Real-Time Monitoring
-- Advanced AI Features
-- API Endpoints & Security
 
 ## Setup
 1. Clone the repository
