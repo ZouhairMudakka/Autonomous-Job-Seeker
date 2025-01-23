@@ -62,6 +62,7 @@ AI Browser Job Workflow/
 │   ├── model_utils.py       # Model serialization/deserialization
 │   ├── regex_utils.py       # Regex patterns and text extraction
 │   ├── telemetry.py        # System telemetry and performance tracking
+│   ├── telemetry_viewer.py # Interactive telemetry visualization + GPT analysis
 │   └── text_cleaning.py     # Text normalization and cleaning
 │
 ├── data/                # Data storage and persistence

@@ -169,24 +169,22 @@ class BrowserSetup:
         profile_dir = self.profiles_dir / (self.browser_type or "chromium")
         profile_dir.mkdir(parents=True, exist_ok=True)
 
-        # Launch arguments focusing on non-incognito usage
+        # Launch arguments (remove --user-data-dir since it's passed as parameter)
         launch_args = [
             "--no-sandbox",
-            "--disable-dev-shm-usage",
-            # Avoid incognito:
-            # no need for `--incognito`
-            f"--user-data-dir={str(profile_dir)}"
+            "--disable-dev-shm-usage"
         ]
         ignore_args = [
             "--enable-automation"
         ]
 
         context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
+            user_data_dir=str(profile_dir),  # This is the correct way to pass user_data_dir
             headless=self.headless,
             args=launch_args,
             ignore_default_args=ignore_args
         )
+        
         if context.pages:
             page = context.pages[0]
         else:

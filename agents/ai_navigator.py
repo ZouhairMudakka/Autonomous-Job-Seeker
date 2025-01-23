@@ -12,22 +12,35 @@ TODO (AI Integration):
 - Add performance monitoring and metrics
 - Test with various LinkedIn layouts and states
 
+DOM Enhancement TODOs:
+- Add dynamic selector lookup from locators
+- Implement selector performance tracking
+- Add fallback selector patterns
+- Enable AI-driven selector updates
+- Track selector success rates
+
 Requirements before activation:
 - Learning pipeline setup
 - Confidence scoring calibration
 - Error handling integration
 - Performance monitoring setup
+- Locators system integration
 
 Do not import or use this module until proper configuration is complete.
 """
 
 from utils.telemetry import TelemetryManager
+from locators.linkedin_locators import LinkedInLocators
+from utils.dom.dom_service import DomService
 
 class AINavigator:
-    def __init__(self, min_confidence=0.8, max_retries=3):
+    def __init__(self, page, min_confidence=0.8, max_retries=3):
+        self.page = page
         self.min_confidence = min_confidence
         self.max_retries = max_retries
         self.retry_count = 0
+        self.dom_service = DomService(page)
+        self.telemetry = TelemetryManager()
         
     async def navigate(self, action, context):
         """
@@ -59,4 +72,16 @@ class AINavigator:
             {"target": target},
             success=True,
             confidence=self.confidence_score
-        ) 
+        )
+
+    async def _execute_action(self, action):
+        """Execute action with DOM-based fallback"""
+        try:
+            # Try primary selector
+            result = await action()
+            return result
+        except Exception:
+            # Fallback to DOM-based approach
+            elements = await self.dom_service.get_clickable_elements(highlight=True)
+            # Implement AI selection logic here
+            return await self._handle_dom_fallback(elements, action) 

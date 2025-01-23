@@ -10,6 +10,12 @@ Features:
 6. Evaluate custom JavaScript/TypeScript on the page if needed.
 7. No LLM usage here; purely mechanical. Orchestrator or separate LLM-based agent
    can provide instructions for this agent on unknown domains or fallback scenarios.
+
+DOM Enhancement Updates:
+- Add support for locator-based selectors
+- Implement selector performance tracking
+- Enable AI-driven selector fallbacks
+- Track selector success rates
 """
 
 import asyncio
@@ -22,6 +28,7 @@ from playwright.async_api import (
 )
 from constants import TimingConstants, Messages
 from utils.telemetry import TelemetryManager
+from locators.linkedin_locators import LinkedInLocators  # Future import
 
 
 class GeneralAgent:
@@ -117,26 +124,19 @@ class GeneralAgent:
         await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY)
         return result
 
-    async def click_element(self, selector: str) -> bool:
-        """
-        Click an element on the page (waits for it to be visible).
-        
-        Returns:
-            True if successful. Raises Exception on failure.
-        """
-        await self._check_if_paused()
+    async def click_element(self, selector: str, **kwargs):
+        """Click element with DOM fallback"""
         try:
-            await self._human_delay()
-            await self.page.wait_for_selector(
-                selector,
-                state="visible",
-                timeout=min(self.default_timeout, TimingConstants.MAX_WAIT_TIME)
-            )
+            # Try direct selector first
             await self.page.click(selector)
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            return True
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Failed to click element '{selector}': {e}")
+            # Fallback to DOM-based approach
+            dom_selector = await LinkedInLocators.get_element(
+                self.page, 
+                selector,
+                dom_fallback=True
+            )
+            await self.page.click(dom_selector)
 
     async def extract_text(self, selector: str) -> str:
         """
