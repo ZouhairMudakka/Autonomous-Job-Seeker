@@ -143,6 +143,13 @@ Notes:
 - Continuous learning from interactions
 
 Assumes user is already logged in. If user is forcibly logged out, the agent raises an exception.
+
+TODO (AI Integration):
+- Replace direct page.click() calls with ai_navigator.navigate()
+- Add confidence scoring for critical actions
+- Integrate with learning pipeline for outcome tracking
+- Add fallback to systematic approach when AI confidence is low
+- Setup proper error handling for AI navigation
 """
 
 import asyncio

@@ -3,6 +3,15 @@ AI-driven navigation with confidence scoring.
 
 NOTE: THIS MODULE IS CURRENTLY PENDING ACTIVATION
 Status: Inactive - Awaiting configuration and integration
+
+TODO (AI Integration):
+- Implement confidence-based navigation logic
+- Integrate with learning_pipeline.py for outcome tracking
+- Add GPT-based decision making for complex navigation
+- Setup proper error handling and recovery
+- Add performance monitoring and metrics
+- Test with various LinkedIn layouts and states
+
 Requirements before activation:
 - Learning pipeline setup
 - Confidence scoring calibration

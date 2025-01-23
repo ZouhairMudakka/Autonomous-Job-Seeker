@@ -19,6 +19,14 @@ Note:
   integrate OpenAI or other LLM calls if you want advanced logic.
 - Heuristic logic can be as simple as referencing success/failure counts from
   the learning pipeline.
+
+TODO (AI Integration):
+- Implement GPT-based confidence scoring
+- Add proper OpenAI API integration
+- Setup confidence threshold calibration
+- Add context-aware scoring logic
+- Integrate with learning_pipeline.py
+- Add performance monitoring
 """
 
 import os

@@ -8,6 +8,12 @@ Features:
 4. Prints each log entry to terminal for real-time feedback.
 5. Size-based rotation: if activity_log.csv exceeds max_file_size_bytes,
    it renames the old file with a timestamp suffix and starts a new one.
+
+TODO (AI Integration):
+- Add confidence score tracking to activity logs
+- Integrate with learning pipeline events
+- Add AI-specific activity types and statuses
+- Setup unified logging for AI and systematic approaches
 """
 
 import pandas as pd

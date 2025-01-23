@@ -3,6 +3,13 @@ Main Controller Module (Async, MVP Version)
 
 Coordinates the automation flow across multiple agents.
 Uses a TaskManager (task_manager.py) for concurrency or scheduling.
+
+TODO (AI Integration):
+- Initialize AI Navigator and Learning Pipeline
+- Add confidence-based decision making
+- Setup proper AI fallback mechanisms
+- Add AI-specific session management
+- Integrate with unified logging system
 """
 
 import asyncio

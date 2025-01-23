@@ -18,6 +18,14 @@ Note:
   build out logic to refine confidence calculations over time.
 - We assume that each "action" is a named operation (e.g., "click_apply_button"),
   and we store success/failure data, confidence, timestamps, etc.
+
+TODO (AI Integration):
+- Implement persistent storage for action outcomes
+- Add success/failure tracking mechanisms
+- Integrate with confidence_scorer.py
+- Add metrics calculation (success rates, confidence thresholds)
+- Setup data cleanup and archival logic
+- Add export/import functionality for training data
 """
 
 import datetime

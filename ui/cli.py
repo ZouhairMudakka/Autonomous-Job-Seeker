@@ -9,6 +9,13 @@ Required Modules:
 - sys: For system-level operations
 - asyncio: To run async calls in each command
 - datetime: For optional timestamp display
+
+TODO (AI Integration):
+- Add AI-specific commands and flags
+- Add confidence score display in status
+- Add learning pipeline statistics command
+- Setup AI debugging commands
+- Add AI/systematic mode toggle
 """
 """
 Command Line Interface (MVP)
@@ -72,7 +79,7 @@ class CLI(cmd.Cmd):
         async def fetch_logs():
             # If your tracker_agent.get_activities is synchronous, just call it directly.
             # If it's async, we do: return await self.controller.tracker_agent.get_activities()
-            df = self.controller.tracker_agent.get_activities()  # Suppose it’s sync
+            df = self.controller.tracker_agent.get_activities()  # Suppose it's sync
             return df
 
         try:
