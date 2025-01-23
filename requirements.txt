@@ -4,6 +4,7 @@ python-dotenv==1.0.1      # Environment variable management
 pandas==2.2.3             # Data manipulation and CSV handling
 requests>=2.32.3          # HTTP requests
 beautifulsoup4==4.12.3    # HTML parsing
+streamlit>=1.32.2         # Interactive data visualization
 linkedin-api==2.3.1      # LinkedIn API integration
 pytest==8.3.0            # Testing framework
 logging==0.4.9.6         # Logging utilities
@@ -48,7 +49,7 @@ python-docx>=1.0.1     # Word document processing
 python-pdf>=0.39       # PDF processing
 tabula-py>=2.9.0       # PDF table extraction
 pytesseract>=0.3.10    # OCR for images
-PyPDF2>=3.0.0  # For PDF processing
+PyPDF2>=3.0.0          # For PDF processing
 
 # LangChain & AI
 langchain-community>=0.3.14  # Community extensions
@@ -113,7 +114,10 @@ pre-commit>=4.0.1     # Git hooks
 # Optional Dependencies
 # tokencost>=0.1.17      # Token usage tracking
 # hatch>=1.14.0          # Build tool
-# build>=1.2.2           # Package building 
+# build>=1.2.2           # Package building
+# RAG support - Future Plan
+# chromadb>=0.6.2        # Vector storage for RAG
+# sentence-transformers>=2.5.1  # Text embeddings for RAG
 
 # LinkedIn Integration & Automation
 #linkedin-scraper>=2.11.5  # LinkedIn profile scraping
