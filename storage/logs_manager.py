@@ -4,6 +4,7 @@ Logging Management Module (Async)
 Uses aiologger for async log output:
 - Daily log file naming (app_YYYYMMDD.log)
 - Console output with optional color for errors
+- Learning pipeline event logging
 - Archive function is commented out (for future use)
 """
 
@@ -132,3 +133,13 @@ class LogsManager:
                 archive_dir.mkdir(exist_ok=True)
                 log_file.rename(archive_dir / log_file.name)
     """
+
+    async def log_learning_event(self, msg: str, confidence: float):
+        """Log a learning pipeline event with confidence score."""
+        formatted_msg = f"[LEARNING] {msg} (confidence={confidence:.2f})"
+        await self.info(formatted_msg)
+
+    async def log_confidence_threshold(self, action: str, new_threshold: float):
+        """Log when confidence thresholds are adjusted."""
+        msg = f"[LEARNING] Adjusted confidence threshold for {action}: {new_threshold:.2f}"
+        await self.info(msg)

@@ -7,6 +7,7 @@ This module handles CSV file operations using pandas, focusing on:
 - Optional data validation (skipping invalid rows, logging them separately)
 - Synchronous approach (safe with pandas)
 - Timestamp-based naming if desired
+- Learning pipeline data storage and retrieval
 
 Commented out backup/export logic for future use.
 """
