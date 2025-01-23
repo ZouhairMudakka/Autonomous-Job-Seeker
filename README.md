@@ -15,45 +15,59 @@ This system uses multiple specialized AI agents to:
 
 ### AI Agents (`agents/`)
 - `credentials_agent.py`: CAPTCHA handling and authentication management
-  - 2captcha integration
-  - Manual CAPTCHA fallback
-  - Future login flow support
 - `form_filler_agent.py`: Intelligent form completion
 - `general_agent.py`: Common browser automation functions
 - `linkedin_agent.py`: LinkedIn-specific operations
 - `tracker_agent.py`: Application status tracking
-- `cv_parser_agent.py`: (Planned) Resume parsing and data extraction
-- `user_profile_agent.py`: (Planned) User data management
+- `user_profile_agent.py`: User data management
+- `ai_navigator.py`: AI-driven navigation with confidence scoring (pending activation)
 
 ### Core Components
-- `utils/`: (Planned) Shared utilities
-  - Random delays
-  - Date formatting
-  - String operations
-  - Custom exceptions
+- `utils/`: Shared utilities
+  - `application_utils.py`: Application tracking utilities
+  - `browser_setup.py`: Browser initialization and configuration
+  - `cv_utils.py`: CV/Resume data processing
+  - `data_export_utils.py`: Data export and reporting
+  - `document_processor.py`: PDF/DOCX/TXT processing
+  - `job_match_utils.py`: Job matching and scoring
+  - `model_utils.py`: Model serialization/deserialization
+  - `regex_utils.py`: Regex patterns and text extraction
+  - `text_cleaning.py`: Text normalization and cleaning
+
+- `models/`: Data models and validation
+  - `application_models.py`: Application lifecycle and status tracking
+  - `cv_models.py`: CV/Resume data structures
+  - `job_models.py`: Job details and matching
+  - `user_models.py`: User profile data structures
+
+- `config/`: Configuration management
+  - `settings.py`: System configuration and environment setup
+
 - `orchestrator/`: Workflow management
   - `controller.py`: Main workflow orchestration
   - `task_manager.py`: Task queuing and execution
+
 - `storage/`: Data persistence
   - `csv_storage.py`: CSV data management
   - `logs_manager.py`: Logging functionality
-  - `database_manager.py`: (Planned) Structured data storage
-  - `json_storage.py`: (Planned) JSON-based storage
+  - `learning_pipeline.py`: AI learning and performance tracking
 
-### Workflow Management (`orchestrator/`)
-- `controller.py`: Main workflow orchestration
-- `task_manager.py`: Task queuing and execution management
-
-### Data Management (`storage/`)
-- `csv_storage.py`: Application data and results management
-- `logs_manager.py`: Activity logging and analytics
+### Data Storage (`data/`)
+- `activity_log.csv`: Automation activity logging
+- `cookies/`: Browser cookie storage
+  - `browser_cookies.json`: Saved browser cookies
+  - `cookies.json`: Application cookies
 
 ### User Interface (`ui/`)
 - `cli.py`: Command-line interface
-- `extension/`: Browser extension for real-time control and monitoring
-
-### Configuration (`config/`)
-- `settings.py`: System configuration and parameters
+- `minimal_gui.py`: Simple desktop GUI implementation
+- `extension/`: Browser extension
+  - `manifest.json`: Extension configuration
+  - `background.js`: Background processes
+  - `content.js`: Content scripts
+  - `linkedin_automation_host.json`: Native messaging config
+  - `options.html/js`: Settings page
+  - `popup.html/js`: Extension popup
 
 ## Features
 
@@ -135,6 +149,10 @@ Current implementation focuses on:
 - Basic browser automation
 - LinkedIn job search
 - Form filling assistance
+
+Pending activation:
+- AI Navigator with confidence scoring
+- Learning pipeline integration
 
 Planned extensions:
 - Automated CV parsing
