@@ -41,7 +41,7 @@ AI Browser Job Workflow/
 ├── storage/           # Data storage and logging
 │   ├── __init__.py   # Storage package initialization
 │   ├── csv_storage.py # CSV-based data persistence
-│   └── logs_manager.py # Application logging and monitoring
+│   ├── logs_manager.py # Application logging and monitoring
 │   └── learning_pipeline.py # AI learning and performance tracking
 │
 ├── tests/            # Test suite
@@ -54,6 +54,7 @@ AI Browser Job Workflow/
 │   ├── __init__.py   # Package initialization
 │   ├── application_utils.py  # Application tracking utilities
 │   ├── browser_setup.py     # Browser initialization and configuration
+│   ├── confidence_scorer.py # AI confidence scoring and threshold management
 │   ├── cv_utils.py          # CV/Resume data processing
 │   ├── data_export_utils.py # Data export and reporting
 │   ├── document_processor.py # PDF/DOCX/TXT processing
