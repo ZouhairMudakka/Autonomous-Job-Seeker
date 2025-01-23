@@ -10,6 +10,7 @@ AI Browser Job Workflow/
 ├── DIRECTORY_STRUCTURE.md # Documentation of project structure
 ├── main.py              # Main application entry point and initialization
 ├── requirements.txt     # Python package dependencies and versions
+├── ROADMAP.md           # Project development roadmap and milestones
 │
 ├── agents/             # AI Agents implementation
 │   ├── __init__.py    # Agents package initialization
@@ -19,17 +20,18 @@ AI Browser Job Workflow/
 │   ├── linkedin_agent.py       # LinkedIn-specific automation and interactions
 │   ├── tracker_agent.py        # Tracks job application status and progress
 │   └── user_profile_agent.py   # Manages user profile data and preferences
+│   └── ai_navigator.py         # AI-driven navigation with confidence scoring
 │
 ├── config/             # Configuration management
-│   ├── __init__.py    # Configuration package initialization
-│   └── settings.py    # Global application settings and constants
+│   ├── __init__.py    # Package exports and load_settings function
+│   └── settings.py    # Browser config, env vars, directory setup, validation
 │
-├── models/            # Data models
-│   ├── __init__.py   # Models package initialization
-│   ├── application_models.py  # Job application data structures
-│   ├── cv_models.py          # Resume/CV data structures
-│   ├── job_models.py         # Job posting data structures
-│   └── user_models.py        # User profile data structures
+├── models/            # Data models and validation
+│   ├── __init__.py   # Exports CVData, UserProfile, JobPosting, ApplicationStatus
+│   ├── application_models.py  # Application lifecycle and status tracking
+│   ├── cv_models.py          # CV/Resume data: personal info, experience, education
+│   ├── job_models.py         # Job details, company info, matching scores
+│   └── user_models.py        # User info and job preferences
 │
 ├── orchestrator/       # Job workflow orchestration
 │   ├── __init__.py    # Orchestrator package initialization
@@ -40,6 +42,7 @@ AI Browser Job Workflow/
 │   ├── __init__.py   # Storage package initialization
 │   ├── csv_storage.py # CSV-based data persistence
 │   └── logs_manager.py # Application logging and monitoring
+│   └── learning_pipeline.py # AI learning and performance tracking
 │
 ├── tests/            # Test suite
 │   ├── __init__.py  # Tests package initialization
@@ -47,7 +50,35 @@ AI Browser Job Workflow/
 │   ├── integration/ # End-to-end and integration tests
 │   └── unit/       # Unit tests for individual components
 │
+├── utils/             # Utility functions and helpers
+│   ├── __init__.py   # Package initialization
+│   ├── application_utils.py  # Application tracking utilities
+│   ├── browser_setup.py     # Browser initialization and configuration
+│   ├── cv_utils.py          # CV/Resume data processing
+│   ├── data_export_utils.py # Data export and reporting
+│   ├── document_processor.py # PDF/DOCX/TXT processing
+│   ├── job_match_utils.py   # Job matching and scoring
+│   ├── model_utils.py       # Model serialization/deserialization
+│   ├── regex_utils.py       # Regex patterns and text extraction
+│   └── text_cleaning.py     # Text normalization and cleaning
+│
+├── data/                # Data storage and persistence
+│   ├── activity_log.csv      # Automation activity logging
+│   └── cookies/             # Browser cookie storage
+│       ├── browser_cookies.json  # Saved browser cookies
+│       └── cookies.json         # Application cookies
+│
 └── ui/              # User interface components
     ├── __init__.py  # UI package initialization
     ├── cli.py      # Command-line interface implementation
+    ├── minimal_gui.py        # Simple desktop GUI implementation
     └── extension/  # Browser extension related files
+        ├── manifest.json # Extension configuration
+        ├── background.js # Background processes
+        ├── content.js   # Content scripts for page interaction
+        ├── linkedin_automation_host.json  # Native messaging config
+        ├── options.html          # Settings page HTML
+        ├── options.js            # Settings page logic
+        ├── popup.html           # Extension popup HTML
+        └── popup.js             # Extension popup logic
+
