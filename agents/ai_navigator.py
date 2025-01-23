@@ -21,6 +21,8 @@ Requirements before activation:
 Do not import or use this module until proper configuration is complete.
 """
 
+from utils.telemetry import TelemetryManager
+
 class AINavigator:
     def __init__(self, min_confidence=0.8, max_retries=3):
         self.min_confidence = min_confidence
@@ -49,4 +51,12 @@ class AINavigator:
                     return await self._handle_retry(action, context, confidence, str(e))
                 return await self._handle_failure(action, context, confidence, str(e))
         else:
-            return await self._handle_low_confidence(action, confidence) 
+            return await self._handle_low_confidence(action, confidence)
+
+    async def navigate_with_confidence(self, target):
+        await self.telemetry.track_event(
+            "navigation_attempt",
+            {"target": target},
+            success=True,
+            confidence=self.confidence_score
+        ) 

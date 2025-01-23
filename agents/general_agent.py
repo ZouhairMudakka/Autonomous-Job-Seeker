@@ -21,6 +21,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError
 )
 from constants import TimingConstants, Messages
+from utils.telemetry import TelemetryManager
 
 
 class GeneralAgent:
@@ -29,7 +30,8 @@ class GeneralAgent:
         page: Page,
         default_timeout: float = TimingConstants.DEFAULT_TIMEOUT,
         min_delay: float = TimingConstants.HUMAN_DELAY_MIN,
-        max_delay: float = TimingConstants.HUMAN_DELAY_MAX
+        max_delay: float = TimingConstants.HUMAN_DELAY_MAX,
+        settings: dict = {}
     ):
         """
         Args:
@@ -37,6 +39,7 @@ class GeneralAgent:
             default_timeout (float): Default timeout in ms for wait_for_selector, etc.
             min_delay (float): Minimum seconds for human-like delay.
             max_delay (float): Maximum seconds for human-like delay.
+            settings (dict): Configuration settings for telemetry.
         """
         self.page = page                # Current active page or frame
         self.root_page = page          # Store reference to original "main" Page
@@ -44,6 +47,7 @@ class GeneralAgent:
         self.min_delay = min_delay
         self.max_delay = max_delay
         self.is_paused = False         # Track pause state
+        self.telemetry = TelemetryManager(settings)
 
     async def pause(self):
         """Pause further actions until 'resume' is called."""

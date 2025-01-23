@@ -19,6 +19,7 @@ from agents.tracker_agent import TrackerAgent
 from constants import TimingConstants, Messages
 from orchestrator.task_manager import TaskManager
 from pathlib import Path
+from utils.telemetry import TelemetryManager
 
 class Controller:
     def __init__(self, settings, page):
@@ -48,6 +49,8 @@ class Controller:
 
         # State management
         self.pause_state = {}
+
+        self.telemetry = TelemetryManager(settings)
 
     async def start_session(self):
         """

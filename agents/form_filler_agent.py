@@ -44,6 +44,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError
 )
 from constants import TimingConstants, Selectors, Messages
+from utils.telemetry import TelemetryManager
 
 # Ensure your OPENAI_API_KEY or relevant GPT-4 key is in env vars.
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
@@ -73,6 +74,8 @@ class FormFillerAgent:
         self.transition_delay = 3.0  # seconds (for page transitions)
         self.poll_interval = 0.5    # seconds (for condition checks)
 
+        self.telemetry = TelemetryManager()
+
     async def fill_form(self, form_data: Dict[str, Any], form_mapping: Dict[str, Dict[str, Any]]):
         """
         Fill a form using provided data and field mapping.
@@ -81,6 +84,12 @@ class FormFillerAgent:
         For example:
           "cover_letter": {"selector": "textarea[name='cover_letter']", "type": "cover_letter_text", "required": True}
         """
+        await self.telemetry.track_event(
+            "form_filling",
+            {"form_type": form_data.type},
+            success=True
+        )
+
         for field_name, field_value in form_data.items():
             if field_name not in form_mapping:
                 print(f"[FormFillerAgent] No mapping for field '{field_name}', skipping.")

@@ -33,6 +33,7 @@ import os
 import random
 
 from storage.learning_pipeline import LearningPipeline
+from utils.telemetry import TelemetryManager
 
 
 class ConfidenceScorer:
@@ -58,6 +59,7 @@ class ConfidenceScorer:
         self.use_gpt = use_gpt
         self.gpt_model_name = gpt_model_name
         self.base_confidence = base_confidence
+        self.telemetry = TelemetryManager()
 
         # For GPT calls, you might need an API key from environment or config
         # self.gpt_api_key = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY_HERE")
@@ -87,6 +89,7 @@ class ConfidenceScorer:
         else:
             final_conf = heuristic_conf
 
+        await self.calculate_confidence(action)
         return max(0.0, min(1.0, final_conf))  # clamp to [0,1]
 
     def _heuristic_confidence(self, action: str) -> float:
@@ -145,3 +148,12 @@ class ConfidenceScorer:
         # For now, we just return a random approach that slightly adjusts the heuristic_conf:
         gpt_adjustment = random.uniform(-0.1, 0.1)  # placeholder
         return max(0.0, min(1.0, heuristic_conf + gpt_adjustment))
+
+    async def calculate_confidence(self, operation_type: str):
+        score = await self._compute_score()
+        await self.telemetry.track_event(
+            "confidence_calculation",
+            {"operation": operation_type, "score": score},
+            success=True,
+            confidence=score
+        )

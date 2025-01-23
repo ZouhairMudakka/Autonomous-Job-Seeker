@@ -147,4 +147,11 @@ class LearningPipeline:
         # - Populate self.outcomes
         pass
 
+    async def record_learning_event(self, event_type, data):
+        await self.telemetry.track_event(
+            "learning_pipeline",
+            {"event_type": event_type, "data": data},
+            success=True
+        )
+
 # End of learning_pipeline.py 
