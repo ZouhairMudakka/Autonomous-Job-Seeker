@@ -96,6 +96,76 @@ For a detailed development roadmap and timeline, see [ROADMAP.md](ROADMAP.md)
    - Other platform settings
 4. Run the application: `python main.py`
 
+## System Operation
+
+### Starting the Application
+```bash
+python main.py
+```
+
+### Interactive Menu Flow
+
+1. **Browser Selection**
+   ```
+   Select Browser:
+   1) Edge (recommended)
+   2) Chrome
+   3) Firefox
+   4) Attach to existing browser (Chromium-based)*
+   ```
+   *Note: To attach to existing browser, launch it with:
+   ```bash
+   # For Chrome:
+   google-chrome --remote-debugging-port=9222
+   # For Edge:
+   msedge --remote-debugging-port=9222
+   ```
+
+2. **Operation Mode Selection**
+   ```
+   Operation Mode:
+   1) Automatic Mode (autopilot)
+   2) Full Control Mode (interactive CLI)
+   3) GUI Mode
+   4) Exit
+   ```
+
+### Operation Modes
+
+#### 1. Automatic Mode
+- Runs predefined workflow automatically
+- Handles job search and application process
+- Minimal user intervention required
+- Shows real-time progress updates
+
+#### 2. Full Control Mode (CLI)
+Available commands:
+- `start`: Begin job search workflow
+- `stop`: Pause current operations
+- `status`: Check progress statistics
+- `config`: Update preferences
+- `export`: Export history/analytics
+- `quit`: Return to mode selection
+
+#### 3. GUI Mode
+- Minimal graphical interface
+- Visual progress tracking
+- Basic control buttons
+- Real-time status updates
+(Currently in development)
+
+### Error Recovery
+- System provides graceful error handling
+- Option to retry or switch modes
+- Automatic resource cleanup
+- Session persistence where possible
+
+### Session Management
+- Browser sessions can be persistent or temporary
+- Cookies and preferences are saved between runs
+- Automatic cleanup on exit
+- Support for headless operation
+
 ## Usage
 1. Start the application using the CLI:
    ```bash
