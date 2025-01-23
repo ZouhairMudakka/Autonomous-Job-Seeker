@@ -171,6 +171,10 @@ def load_settings() -> dict:
             'data_dir': base_data_dir,  # Also set here
             'max_retries': int(os.getenv('MAX_RETRIES', '3')),
             'retry_delay': float(os.getenv('RETRY_DELAY', '1.0'))
+        },
+        'telemetry': {
+            'enabled': os.getenv('TELEMETRY_ENABLED', 'true').lower() == 'true',
+            'storage_path': os.getenv('TELEMETRY_STORAGE_PATH', './data/telemetry')
         }
     }
     
