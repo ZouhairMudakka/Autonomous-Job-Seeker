@@ -1,5 +1,48 @@
 """
 Telemetry Viewer - Interactive visualization of telemetry data + Universal Model integration
+
+This version:
+1. Dynamically loads the recognized model names from universal_model.ModelSelector
+2. If user doesn't pick a model, we fall back to the default from universal_model (DEFAULT_TEXT_MODEL)
+3. Max tokens also default to whatever universal_model logic dictates
+4. The user can optionally override model or token count in the UI
+
+Future Enhancements:
+-------------------
+1. Conversation Explorer:
+   - Add dedicated chat analysis tab
+   - Show conversation threads
+   - Display message pairs
+   - Track conversation outcomes
+   - Visualize chat patterns
+
+2. Enhanced Analytics Views:
+   - Token usage charts
+   - Cost analysis dashboard
+   - Response time graphs
+   - Success rate visualizations
+   - User session analysis
+   - Peak usage patterns
+
+3. AI Analysis Features:
+   - Conversation pattern detection
+   - Usage trend analysis
+   - Anomaly detection
+   - Performance insights
+   - Cost optimization suggestions
+
+4. Interactive Features:
+   - Conversation replay
+   - Message search
+   - Pattern filtering
+   - Custom date ranges
+   - Export capabilities
+
+5. Performance Monitoring:
+   - Real-time alerts
+   - Model performance comparison
+   - Error rate tracking
+   - Resource usage visualization
 """
 
 import os
@@ -11,8 +54,7 @@ import pandas as pd
 import plotly.express as px
 from typing import List, Dict, Any
 
-# Instead of importing openai directly, we'll import our universal_model module:
-# Make sure you have universal_model.py in your project path.
+# Import the universal model
 from universal_model import ModelSelector
 
 class TelemetryViewer:
@@ -21,7 +63,7 @@ class TelemetryViewer:
         self.metrics_dir = Path('./data/telemetry/metrics')
         
     def load_events(self, start_date: str = None, end_date: str = None) -> List[Dict]:
-        """Load events within date range."""
+        """Load events within date range from local JSON logs."""
         all_events = []
         for file in self.data_dir.glob("events_*.json"):
             date_str = file.stem.split('_')[1]
@@ -65,6 +107,7 @@ class TelemetryViewer:
             analytics['daily_events'] = daily_counts
         
         return analytics
+
 
 def main():
     st.title("Telemetry Viewer (with Universal Model)")
@@ -119,18 +162,31 @@ def main():
 
     # 5. GPT Analysis (with universal_model)
     st.subheader("AI (GPT) Analysis")
-    st.write("You can ask a question about the telemetry data. We'll pass a summary + your question to the chosen model.")
+    st.write("Query the telemetry data using a universal model interface.")
 
-    # Let the user pick a model from possible choices
-    # You can adapt these to the actual model names your universal_model handles:
-    model_choice = st.selectbox(
-        "Select Model",
-        ["gpt-3.5-turbo", "gpt-4", "deepseek-chat", "deepseek-reasoner", "gpt-4o-mini"]
+    # Step A: Instantiate ModelSelector (once)
+    selector = ModelSelector()
+
+    # Step B: Let user pick a model from a combined list or fallback to 'None'
+    # so that universal model can handle defaults
+    all_known_models = (
+        selector.OPENAI_MODELS
+        + selector.DEEPSEEK_MODELS
+        + selector.MODEL_BOX_MODELS
     )
+    all_known_models = sorted(list(set(all_known_models)))  # remove duplicates, sort
+
+    with st.expander("Advanced Model Selection"):
+        chosen_model = st.selectbox(
+            "Select a Model (or leave None for universal default)",
+            [None] + all_known_models,
+            format_func=lambda x: x if x else "None (use universal default)"
+        )
+        user_max_tokens = st.number_input("Max Tokens (0 = let universal model decide)", min_value=0, value=0)
 
     enable_gpt = st.checkbox("Enable GPT Analysis?")
     if enable_gpt:
-        user_question = st.text_area("Enter your question about the telemetry data:")
+        user_question = st.text_area("Enter your question about the telemetry data:", "")
         if st.button("Analyze with GPT"):
             if not user_question.strip():
                 st.warning("Please enter a question.")
@@ -148,17 +204,17 @@ def main():
                 The user will ask a question related to these stats. Answer concisely.
                 """
 
-                from universal_model import ModelSelector
-                selector = ModelSelector()
-
                 try:
+                    # If user picked 0, let universal model handle default. If > 0, pass it in.
+                    max_tokens_override = None if user_max_tokens == 0 else user_max_tokens
+
                     response = selector.chat_completion(
-                        model=model_choice,
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_question}
                         ],
-                        temperature=0.7,
+                        model=chosen_model,  # can be None
+                        max_tokens=max_tokens_override
                     )
                     st.write("### GPT Response")
                     st.write(response)

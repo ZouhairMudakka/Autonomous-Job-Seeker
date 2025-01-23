@@ -1,5 +1,37 @@
 """
 Telemetry Module for tracking system performance and usage.
+
+Future Enhancements:
+-------------------
+1. User-AI Chat Tracking: [HIGH PRIORITY]
+   - Add conversation_id tracking        # Critical for debugging
+   - Track token usage and costs        # Critical for billing
+   - Monitor response times             # Critical for performance
+   - Track success/error rates          # Critical for reliability
+
+2. Enhanced Metrics: [HIGH PRIORITY]
+   - Token usage analytics              # Critical for cost management
+   - Cost tracking per model            # Critical for billing
+   - Response time monitoring           # Critical for SaaS SLAs
+   - Success rate by conversation       # Important for quality
+
+3. Performance Monitoring: [URGENT]
+   - Add performance alerts             # Critical for system health
+   - Track model-specific metrics       # Critical for reliability
+   - Monitor rate limits                # Critical to prevent failures
+   - Track resource usage               # Critical for scaling
+
+4. Conversation Analytics: [MEDIUM]
+   - Group by conversation_id
+   - Track messages per conversation
+   - Average tokens per turn
+   - Topic/category tracking
+
+5. Session Management: [MEDIUM]
+   - Add anonymous session IDs
+   - Track session durations
+   - Monitor user patterns
+   - Track peak usage times
 """
 
 import logging
