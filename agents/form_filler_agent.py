@@ -37,14 +37,13 @@ import random
 import os
 from typing import Any, Dict, Union, Optional
 from pathlib import Path
-import openai
 
-from playwright.async_api import (
-    Page,
-    TimeoutError as PlaywrightTimeoutError
-)
+import openai
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from constants import TimingConstants, Selectors, Messages
 from utils.telemetry import TelemetryManager
+from utils.dom.dom_service import DomService
 
 # Ensure your OPENAI_API_KEY or relevant GPT-4 key is in env vars.
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
@@ -52,26 +51,26 @@ openai.api_key = os.getenv("OPENAI_API_KEY", "")
 class FormFillerAgent:
     def __init__(
         self,
-        page: Page,
+        dom_service: DomService,
         default_wait: float = 10.0,  # seconds
         raise_on_error: bool = False
     ):
         """
         Args:
-            page (Page): An async Playwright Page instance.
-            default_wait (float): Default wait time in seconds for element lookups.
+            dom_service (DomService): A DomService instance to handle all DOM interactions.
+            default_wait (float): Default wait time in seconds for element lookups (unused here, but can be stored if needed).
             raise_on_error (bool): If True, raise exceptions on first error.
                                    If False, log error and continue filling other fields.
         """
-        self.page = page
+        self.dom_service = dom_service
         self.default_wait = default_wait
         self.raise_on_error = raise_on_error
 
-        # Standard delays (matching GeneralAgent)
+        # Standard delays
         self.human_delay_min = 0.3  # seconds
         self.human_delay_max = 1.0  # seconds
         self.action_delay = 2.0     # seconds (for form submissions)
-        self.transition_delay = 3.0  # seconds (for page transitions)
+        self.transition_delay = 3.0 # seconds (for page transitions)
         self.poll_interval = 0.5    # seconds (for condition checks)
 
         self.telemetry = TelemetryManager()
@@ -102,7 +101,7 @@ class FormFillerAgent:
 
             try:
                 await self._fill_field(field_name, field_value, selector, field_type, required)
-                await asyncio.sleep(TimingConstants.FORM_FIELD_DELAY)  # Add delay between fields
+                await asyncio.sleep(TimingConstants.FORM_FIELD_DELAY)  # Delay between fields
             except Exception as e:
                 error_msg = f"[FormFillerAgent] Error filling field '{field_name}': {str(e)}"
                 if self.raise_on_error:
@@ -117,11 +116,11 @@ class FormFillerAgent:
 
         Raises an exception if not found and raise_on_error=True.
         """
-        await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before submission
+        await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Delay before submission
         try:
             element = await self._wait_for_element(submit_button_selector)
             await element.click()
-            await asyncio.sleep(TimingConstants.FORM_SUBMIT_DELAY)  # Add delay after submission
+            await asyncio.sleep(TimingConstants.FORM_SUBMIT_DELAY)  # Delay after submission
             return True
         except Exception as e:
             error_msg = f"[FormFillerAgent] Could not submit form: {str(e)}"
@@ -156,22 +155,22 @@ class FormFillerAgent:
             # Step 2: Process each form step until submission
             while True:
                 # Check for final submit button first
-                submit_btn = await self.page.query_selector('button[aria-label="Submit application"]')
+                submit_btn = await self.dom_service.query_selector('button[aria-label="Submit application"]')
                 if submit_btn:
-                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before final submit
+                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await submit_btn.click()
-                    await asyncio.sleep(TimingConstants.FORM_SUBMIT_DELAY)  # Add delay after submission
+                    await asyncio.sleep(TimingConstants.FORM_SUBMIT_DELAY)
                     return "applied"
                 
                 # Fill visible form fields on current step
                 await self._fill_current_step_fields(form_data)
                 
                 # Look for and click "Next" button
-                next_btn = await self.page.query_selector('button[aria-label="Continue to next step"]')
+                next_btn = await self.dom_service.query_selector('button[aria-label="Continue to next step"]')
                 if next_btn:
-                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before clicking next
+                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await next_btn.click()
-                    await asyncio.sleep(TimingConstants.ACTION_DELAY)  # Add delay after clicking next
+                    await asyncio.sleep(TimingConstants.ACTION_DELAY)
                 else:
                     print("[FormFillerAgent] No next or submit button found.")
                     return "failed"
@@ -183,11 +182,11 @@ class FormFillerAgent:
     async def _handle_cv_upload(self, cv_path: Optional[str]):
         """Handle CV upload if required and CV path is provided."""
         try:
-            upload_input = await self.page.query_selector('input[type="file"][name="fileId"]')
+            upload_input = await self.dom_service.query_selector('input[type="file"][name="fileId"]')
             if upload_input:
                 if cv_path:
                     await upload_input.set_input_files(cv_path)
-                    await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)  # Add delay after upload
+                    await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
                 else:
                     print("[FormFillerAgent] CV upload required but no CV path provided.")
         except Exception as e:
@@ -200,44 +199,45 @@ class FormFillerAgent:
         """
         try:
             # Phone number field
-            phone_input = await self.page.query_selector('input[name="phoneNumber"]')
+            phone_input = await self.dom_service.query_selector('input[name="phoneNumber"]')
             if phone_input and form_data.get("phone"):
-                await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before filling
+                await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                 await phone_input.fill(form_data["phone"])
 
             # Work authorization radio buttons
             if form_data.get("work_authorization"):
-                auth_radio = await self.page.query_selector(
+                auth_radio = await self.dom_service.query_selector(
                     f'label:has-text("{form_data["work_authorization"]}")'
                 )
                 if auth_radio:
-                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before clicking
+                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await auth_radio.click()
 
             # Years of experience dropdown/select
             if form_data.get("years_of_experience"):
-                exp_select = await self.page.query_selector('select[id*="experience"]')
+                exp_select = await self.dom_service.query_selector('select[id*="experience"]')
                 if exp_select:
-                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before selecting
+                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await exp_select.select_option(label=form_data["years_of_experience"])
 
             # Handle any required checkboxes (e.g., certifications)
-            required_checkboxes = await self.page.query_selector_all(
+            required_checkboxes = await self.dom_service.query_selector_all(
                 'input[type="checkbox"][required]'
             )
             for checkbox in required_checkboxes:
                 if not await checkbox.is_checked():
-                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before clicking
+                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await checkbox.click()
 
             # Handle any required text areas (e.g., additional information)
-            required_textareas = await self.page.query_selector_all(
+            required_textareas = await self.dom_service.query_selector_all(
                 'textarea[required]'
             )
             for textarea in required_textareas:
-                if not await textarea.input_value():
-                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Add delay before filling
-                    await textarea.fill("N/A")  # Or some default text from form_data
+                existing_value = await textarea.input_value()
+                if not existing_value:
+                    await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
+                    await textarea.fill("N/A")
 
         except Exception as e:
             print(f"[FormFillerAgent] Error filling current step fields: {e}")
@@ -248,19 +248,11 @@ class FormFillerAgent:
         Returns True if we can continue, False if we should skip.
         """
         try:
-            # Example: Check for questions about required years of experience
-            exp_question = await self.page.query_selector(
-                'label:has-text("years of experience")'
-            )
+            exp_question = await self.dom_service.query_selector('label:has-text("years of experience")')
             if exp_question:
-                # Logic to determine if we meet the requirement
-                # For now, just log it
                 print("[FormFillerAgent] Found experience requirement question")
                 
-            # Check for required certifications
-            cert_question = await self.page.query_selector(
-                'label:has-text("certifications")'
-            )
+            cert_question = await self.dom_service.query_selector('label:has-text("certifications")')
             if cert_question:
                 print("[FormFillerAgent] Found certification requirement")
                 
@@ -289,12 +281,10 @@ class FormFillerAgent:
             value (Any): The value for this field (could be text, a file path, or a dict for cover letter).
             selector (str): CSS selector for the element.
             field_type (str): e.g. "text", "upload", "cover_letter_text", etc.
-            required (bool): Whether this field is mandatory. If True and we fail to fill, we might ask user input.
+            required (bool): Whether this field is mandatory.
         """
-        # Introduce a short random delay for human-like behavior
         await self._human_delay(0.8, 1.5)
 
-        # Determine which handler to call
         if field_type in ["text", "select", "checkbox", "radio"]:
             element = await self._wait_for_element(selector)
             if field_type == "text":
@@ -307,12 +297,10 @@ class FormFillerAgent:
                 await self._handle_radio(selector, value)
 
         elif field_type == "upload":
-            # File upload (e.g., CV)
             element = await self._wait_for_element(selector)
             await self._handle_file_upload(element, value, required)
 
         elif field_type in ["cover_letter_text", "cover_letter_upload"]:
-            # For generating & filling or uploading a cover letter
             await self._handle_cover_letter(field_type, selector, value, required)
         else:
             print(f"[FormFillerAgent] Unknown field type '{field_type}' for '{field_name}', skipping.")
@@ -322,7 +310,7 @@ class FormFillerAgent:
     # -------------------------------------------------------------------------
     async def _handle_text_field(self, element, text_value: Union[str, int, float]):
         """Clears existing text and types new text into the field."""
-        await element.fill("")  # Clear any existing text
+        await element.fill("")
         await self._human_delay(0.4, 0.9)
         await element.type(str(text_value))
 
@@ -350,8 +338,7 @@ class FormFillerAgent:
         if not file_path or not Path(file_path).exists():
             msg = f"File to upload not found: {file_path}"
             if required:
-                # Prompt user for a correct path?
-                new_path = input(f"Required file not found. Please provide a valid file path or press enter to skip: ").strip()
+                new_path = input("Required file not found. Provide a valid file path or press enter to skip: ").strip()
                 if new_path and Path(new_path).exists():
                     file_path = new_path
                 else:
@@ -367,7 +354,7 @@ class FormFillerAgent:
     async def _handle_cover_letter(self, field_type: str, selector: str, value: Any, required: bool):
         """
         Generate or retrieve a cover letter, then either fill or upload it.
-        If generation fails once, retry. If fails again and required, ask user manually.
+        If generation fails, retry once; if still failing and required, prompt user.
         """
         attempts = 0
         cover_text = None
@@ -390,12 +377,10 @@ class FormFillerAgent:
                             print("[FormFillerAgent] No cover letter provided; skipping.")
                     else:
                         print("[FormFillerAgent] Cover letter not required; skipping after failures.")
-                    # End while if required was handled (user input) or skipping
             else:
                 # If we got cover_text successfully, break
                 break
 
-        # If we still have no cover_text after attempts or manual input, skip
         if not cover_text:
             print("[FormFillerAgent] No cover letter generated or provided. Skipping.")
             return
@@ -404,7 +389,6 @@ class FormFillerAgent:
             element = await self._wait_for_element(selector)
             await self._handle_text_field(element, cover_text)
         elif field_type == "cover_letter_upload":
-            # Write the text to a temp .txt file & upload
             file_path = await self._write_cover_letter_to_file(cover_text)
             element = await self._wait_for_element(selector)
             await self._handle_file_upload(element, file_path, required=False)
@@ -419,11 +403,7 @@ class FormFillerAgent:
     # Cover Letter Generation Logic
     # -------------------------------------------------------------------------
     async def _generate_cover_letter_if_needed(self, value: Any) -> str:
-        """
-        If 'value' is already a string, use it directly.
-        If it's a dict with { job_title, job_description, ... }, call GPT-4.
-        Otherwise, return empty string.
-        """
+        """If 'value' is a string, use it. If it's a dict, call GPT. Otherwise, return empty."""
         if isinstance(value, str):
             return value
 
@@ -433,48 +413,39 @@ class FormFillerAgent:
             cover_text = await self._call_llm_cover_letter(job_title, job_desc)
             return cover_text
 
-        # If no valid data is found, return empty
         return ""
 
     async def _call_llm_cover_letter(self, job_title: str, job_description: str) -> str:
-        """
-        Example GPT-4 call, wrapped to appear async.
-        """
-        prompt = f"""Write a concise but effective cover letter for a position:
-Job Title: {job_title}
-Job Description: {job_description}
-Keep it professional, 200 words or fewer."""
+        """Example GPT-4 call, done via run_in_executor for a sync OpenAI call."""
+        prompt = (
+            f"Write a concise but effective cover letter for a position:\n"
+            f"Job Title: {job_title}\n"
+            f"Job Description: {job_description}\n"
+            f"Keep it professional, 200 words or fewer."
+        )
 
-        # If openai python library is sync, we wrap it in run_in_executor
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, self._sync_openai_chat_completion, prompt)
         return response
 
     def _sync_openai_chat_completion(self, prompt: str) -> str:
-        """
-        Synchronous function that calls GPT-4o via OpenAI's ChatCompletion API.
-        You can tweak temperature, etc. if needed.
-        """
+        """Blocking call to OpenAI's ChatCompletion API (GPT-4o)."""
         if not openai.api_key:
-            raise ValueError("OpenAI API key not set. Please set OPENAI_API_KEY env var or configure it.")
+            raise ValueError("OpenAI API key not set. Please set OPENAI_API_KEY.")
 
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-4o",  # Changed from gpt-4 to gpt-4o
+                model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=300,
                 temperature=0.7
             )
-            cover_letter_text = response.choices[0].message.content.strip()
-            return cover_letter_text
+            return response.choices[0].message.content.strip()
         except Exception as e:
             raise RuntimeError(f"OpenAI GPT-4o cover letter generation failed: {str(e)}")
 
     async def _write_cover_letter_to_file(self, cover_text: str) -> str:
-        """
-        Write the cover letter text to a .txt file for uploading. 
-        Return the file path.
-        """
+        """Write cover letter text to a .txt file for uploading. Returns file path."""
         temp_file = Path("temp_cover_letter.txt")
         temp_file.write_text(cover_text, encoding="utf-8")
         return str(temp_file)
@@ -483,11 +454,14 @@ Keep it professional, 200 words or fewer."""
     # Utility Methods
     # -------------------------------------------------------------------------
     async def _wait_for_element(self, selector: str):
-        """Wait for an element to be visible, returning the element handle."""
+        """
+        Wait for an element to be visible, returning the element handle.
+        Uses DomService internally.
+        """
         try:
-            element = await self.page.wait_for_selector(
+            element = await self.dom_service.wait_for_selector(
                 selector,
-                timeout=TimingConstants.DEFAULT_TIMEOUT  # Use constant for timeout
+                timeout=TimingConstants.DEFAULT_TIMEOUT
             )
             return element
         except PlaywrightTimeoutError:
@@ -496,7 +470,7 @@ Keep it professional, 200 words or fewer."""
     async def _human_delay(self, min_sec: float = None, max_sec: float = None):
         """
         Short random delay to mimic human-like interaction.
-        Default range is shorter for a faster user experience 
+        Defaults are shorter for a faster user experience
         but still not instantaneous.
         """
         min_sec = min_sec if min_sec is not None else TimingConstants.HUMAN_DELAY_MIN
