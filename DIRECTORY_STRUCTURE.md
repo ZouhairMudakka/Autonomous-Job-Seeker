@@ -46,9 +46,15 @@ AI Browser Job Workflow/
 │
 ├── tests/            # Test suite
 │   ├── __init__.py  # Tests package initialization
-│   ├── fixtures/    # Test data and mock objects
+│   ├── conftest.py  # Test configuration and shared fixtures
 │   ├── integration/ # End-to-end and integration tests
-│   └── unit/       # Unit tests for individual components
+│   │   ├── __init__.py     # Integration tests package initialization
+│   │   └── test_controller.py  # Tests for controller component integration
+│   ├── unit/       # Unit tests for individual components
+│   │   ├── __init__.py     # Unit tests package initialization
+│   │   ├── test_csv_storage.py  # Tests for CSV storage functionality
+│   │   └── test_linkedin_agent.py  # Tests for LinkedIn agent functionality
+│   └── test_dom_features.py  # Tests for DOM service features
 │
 ├── utils/             # Utility functions and helpers
 │   ├── __init__.py   # Package initialization

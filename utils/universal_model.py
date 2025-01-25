@@ -280,3 +280,66 @@ class ModelSelector:
         except Exception as e:
             self.logger.error(f"Error calling {model} with openai library: {str(e)}")
             return f"Error calling {model}: {str(e)}"
+
+    def vision_completion(self, model: str, image: bytes, prompt: str) -> str:
+        """
+        Process an image with a vision model through ModelBox.
+        """
+        if not isinstance(image, bytes) or len(image) == 0:
+            return "Error: Invalid image data - must be non-empty bytes"
+        
+        if not prompt or not isinstance(prompt, str):
+            return "Error: Prompt must be a non-empty string"
+
+        client = None
+        try:
+            if not self.model_box_api_key:
+                return "Error: MODEL_BOX_API_KEY not set"
+
+            # Configure OpenAI client for ModelBox with correct endpoint
+            client = openai.Client(
+                api_key=self.model_box_api_key,
+                base_url=f"{self.model_box_endpoint.rstrip('/')}/v1"  # Ensure single /v1 path
+            )
+
+            # Convert image to base64
+            import base64
+            image_b64 = base64.b64encode(image).decode('utf-8')
+
+            # Create the messages array with image
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text", 
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{image_b64}"
+                            }
+                        }
+                    ]
+                }
+            ]
+
+            # Make the API call using the new client interface
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages
+            )
+
+            return response.choices[0].message.content
+
+        except Exception as e:
+            self.logger.error(f"Error in vision completion: {str(e)}")
+            return f"Error processing image with vision model: {str(e)}"
+        finally:
+            # Ensure proper cleanup
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing client: {str(e)}")
