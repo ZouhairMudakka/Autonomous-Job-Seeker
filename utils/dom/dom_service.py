@@ -1,8 +1,8 @@
 """DOM Service for managing page interactions and element tracking"""
 
 import os
-from typing import List
-from playwright.async_api import Page
+from typing import List, Optional
+from playwright.async_api import Page, ElementHandle, TimeoutError as PlaywrightTimeoutError
 from utils.telemetry import TelemetryManager
 from .dom_models import DOMElementNode
 
@@ -15,6 +15,36 @@ class DomService:
             os.path.dirname(__file__), 
             "build_dom_tree.js"
         )
+
+    async def wait_for_selector(self, selector: str, timeout: float = None) -> Optional[ElementHandle]:
+        """Wait for element to appear and return it."""
+        try:
+            return await self.page.wait_for_selector(selector, timeout=timeout)
+        except PlaywrightTimeoutError:
+            return None
+
+    async def query_selector(self, selector: str) -> Optional[ElementHandle]:
+        """Find first matching element."""
+        return await self.page.query_selector(selector)
+
+    async def query_selector_all(self, selector: str) -> List[ElementHandle]:
+        """Find all matching elements."""
+        return await self.page.query_selector_all(selector)
+
+    async def screenshot_element(self, selector: str, path: Optional[str] = None) -> Optional[bytes]:
+        """Take screenshot of element matching selector."""
+        element = await self.query_selector(selector)
+        if not element:
+            return None
+        return await element.screenshot(path=path)
+
+    async def verify_selector_visible(self, selector: str, timeout: float = None) -> bool:
+        """Check if selector is visible within timeout."""
+        try:
+            await self.wait_for_selector(selector, timeout=timeout)
+            return True
+        except PlaywrightTimeoutError:
+            return False
 
     async def get_dom_tree(self, highlight: bool = False, max_highlight: int = 75) -> DOMElementNode:
         """
