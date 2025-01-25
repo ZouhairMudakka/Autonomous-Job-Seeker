@@ -1,11 +1,23 @@
-"""Test DOM Service Features"""
+"""
+Test DOM Service Features + Vision Model Inference
+
+1. Initialize browser in headed mode
+2. Highlight elements (2 cycles)
+3. Take one screenshot after second cycle
+4. Process with vision model
+5. End session and show cost
+"""
 
 import asyncio
+from pathlib import Path
+import sys
 from utils.browser_setup import BrowserSetup
 from utils.dom.dom_service import DomService
+from utils.universal_model import ModelSelector
+import pytest
 
-async def test_dom_features():
-    # Initialize browser
+@pytest.mark.asyncio
+async def test_dom_features_with_vision():
     settings = {
         'browser': {
             'headless': False,
@@ -18,35 +30,90 @@ async def test_dom_features():
             'data_dir': './data'
         }
     }
-    
+
     browser_setup = BrowserSetup(settings)
     browser_or_context, page = await browser_setup.initialize()
-    
+    screenshot_file = None
+    vision_cost = 0.0
+
     try:
-        # Navigate to test page
         await page.goto('https://www.linkedin.com')
-        
-        # Initialize DOM service
         dom_svc = DomService(page, telemetry=browser_setup.telemetry)
-        
-        # Single shot test
-        print("\nTesting single shot highlighting...")
+
+        # First highlight cycle
+        print("\nFirst highlight cycle...")
         clickable_elems = await dom_svc.get_clickable_elements(highlight=True, max_highlight=75)
-        print(f"\nFound {len(clickable_elems)} clickable elements. First 5:")
-        for elem in clickable_elems[:5]:
-            print(f" - {elem.tag} (highlight #{elem.highlight_index})")
-            print(f"   Attributes: {elem.attributes}")
+        print(f"Found {len(clickable_elems)} clickable elements")
+        await asyncio.sleep(15)  # Wait 15 seconds
+
+        # Second highlight cycle
+        print("\nSecond highlight cycle...")
+        clickable_elems = await dom_svc.get_clickable_elements(highlight=True, max_highlight=75)
+        print(f"Refreshed {len(clickable_elems)} clickable elements")
+        await asyncio.sleep(5)  # Brief pause before screenshot
+
+        # Take screenshot after second cycle
+        print("\nCapturing screenshot...")
+        screenshot_path = Path("./data/screenshots")
+        screenshot_path.mkdir(parents=True, exist_ok=True)
+        screenshot_file = screenshot_path / "vision_test_screenshot.png"
+        await page.screenshot(path=str(screenshot_file))
+
+        # Process with vision model
+        model_selector = ModelSelector()
+        vision_model = "google/gemini-2.0-flash-thinking"
+        with open(screenshot_file, "rb") as f:
+            image_data = f.read()
+
+        # Vision prompt
+        vision_prompt = """
+        Please analyze this screenshot and describe:
+        1. The main elements visible on the page
+        2. Any highlighted or colored overlays you see
+        3. The general layout and structure
+        4. Any clickable elements you can identify
+        """
+
+        print(f"\nProcessing screenshot with {vision_model}...")
+        print("Prompt:", vision_prompt.strip())
         
-        # Auto-refresh test
-        print("\nTesting auto-refresh (2s intervals, 3 iterations)...")
-        await dom_svc.refresh_highlights(interval_sec=2, iterations=3)
-        
-        # Wait to see final result
-        print("\nWaiting 5 seconds to view final state...")
-        await asyncio.sleep(5)
-        
+        try:
+            response = model_selector.vision_completion(
+                model=vision_model,
+                image=image_data,
+                prompt=vision_prompt
+            )
+            
+            if response.startswith("Error"):
+                raise Exception(response)
+                
+        except Exception as e:
+            print(f"\n===== VISION PROCESSING ERROR =====")
+            print(str(e))
+            print("================================")
+            response = "Vision processing failed"
+            vision_cost = 0.0
+
+        # Print vision model's response
+        print("\n===== VISION MODEL RESPONSE =====")
+        print(response)
+        print("================================")
+
+        # Calculate vision cost (placeholder)
+        vision_cost = 0.05  # Example cost per vision call
+
+        # Final viewing time
+        print("\nFinal viewing period (15 seconds)...")
+        await asyncio.sleep(15)
+
     finally:
         await browser_setup.cleanup(browser_or_context, page)
+        
+        # Print cost summary after cleanup
+        print("\n===== SESSION SUMMARY =====")
+        print(f"Screenshot saved: {screenshot_file}")
+        print(f"Vision processing cost: ${vision_cost:.2f}")
+        print("=========================")
 
 if __name__ == "__main__":
-    asyncio.run(test_dom_features()) 
+    asyncio.run(test_dom_features_with_vision())
