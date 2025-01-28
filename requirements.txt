@@ -5,131 +5,159 @@ pandas==2.2.3             # Data manipulation and CSV handling
 requests>=2.32.3          # HTTP requests
 beautifulsoup4==4.12.3    # HTML parsing
 streamlit>=1.32.2         # Interactive data visualization
-linkedin-api==2.3.1      # LinkedIn API integration
-pytest==8.3.0            # Testing framework
-logging==0.4.9.6         # Logging utilities
-Pillow==11.0.0           # Image processing (for CAPTCHA)
-playwright>=1.49.0       # Alternative browser automation
-pydantic>=2.10.4        # Data validation
-httpx>=0.27.2           # HTTP client
-langchain>=0.3.14       # LangChain core
-langchain-openai>=0.3.0 # OpenAI integration
-langchain-anthropic>=0.3.1 # Anthropic integration
-langchain-fireworks>=0.2.5 # Fireworks integration
-langchain-google-genai>=2.0.8 # Google AI integration
-posthog>=3.8.3          # Analytics
-aiologger>=0.7.0        # Async logging functionality
-colorama>=0.4.6         # Color output for console logs
-pydantic[email]>=2.10.4  # Data validation with email support
+linkedin-api==2.3.1       # LinkedIn API integration
+pytest==8.3.0             # Testing framework
+logging==0.4.9.6          # Logging utilities
+Pillow==11.0.0            # Image processing (for CAPTCHA)
+playwright>=1.49.0        # Alternative browser automation
+pydantic>=2.10.4          # Data validation
+httpx>=0.27.2             # HTTP client
+posthog>=3.8.3            # Analytics
+aiologger>=0.7.0          # Async logging functionality
+colorama>=0.4.6           # Color output for console logs
+pydantic[email]>=2.10.4   # Data validation with email support
+
 
 # Google Authentication & Integration
-google-auth>=2.37.0         # Google authentication
-google-auth-oauthlib>=1.2.1 # OAuth 2.0 for Google
-google-auth-httplib2>=0.2.0 # HTTP client for Google auth
-google-api-python-client>=2.159.0 # Google API client library
+google-auth>=2.37.0            # Google authentication
+google-auth-oauthlib>=1.2.1    # OAuth 2.0 for Google
+google-auth-httplib2>=0.2.0    # HTTP client for Google auth
+google-api-python-client>=2.159.0  # Google API client library
 google-cloud-secret-manager>=2.22.0 # Secure credential storage
-#browser-cookie3>=0.20.1    # Browser cookie extraction
-msal>=1.31.1              # Microsoft authentication (for comparison)
+msal>=1.31.1                   # Microsoft authentication (for comparison)
+
 
 # Browser Automation & Interaction
-#selenium-stealth>=1.0.6  # Anti-detection for Selenium
+#selenium-stealth>=1.0.6     # Anti-detection for Selenium
 #undetected-chromedriver>=3.5.5  # Undetectable Chrome automation
-#webdriver-manager>=4.0.2 # WebDriver management
-#pyautogui>=0.9.54       # GUI automation backup
-#fake-useragent>=2.0.3   # Random user agent generation
-#selenium-wire>=5.1.0    # Extended Selenium capabilities
-#pyppeteer>=2.0.0        # Python port of Puppeteer
+#webdriver-manager>=4.0.2    # WebDriver management
+#pyautogui>=0.9.54           # GUI automation backup
+#fake-useragent>=2.0.3       # Random user agent generation
+#selenium-wire>=5.1.0        # Extended Selenium capabilities
+#pyppeteer>=2.0.0            # Python port of Puppeteer
+
 
 # Data Processing & Analysis
-numpy>=1.24.3           # Numerical computations
-polars>=0.20.6         # Fast DataFrame operations
-openpyxl>=3.1.2        # Excel file support
-xlrd>=2.0.1            # Excel file reading
-python-docx>=1.0.1     # Word document processing
-python-pdf>=0.39       # PDF processing
-tabula-py>=2.9.0       # PDF table extraction
-pytesseract>=0.3.10    # OCR for images
-PyPDF2>=3.0.0          # For PDF processing
+numpy>=1.24.3         # Numerical computations
+polars>=0.20.6        # Fast DataFrame operations
+openpyxl>=3.1.2       # Excel file support
+xlrd>=2.0.1           # Excel file reading
+python-docx>=1.0.1    # Word document processing
+python-pdf>=0.39      # PDF processing
+tabula-py>=2.9.0      # PDF table extraction
+pytesseract>=0.3.10   # OCR for images
+PyPDF2>=3.0.0         # For PDF processing
+
 
 # LangChain & AI
-langchain-community>=0.3.14  # Community extensions
-langchain-core>=0.3.29       # Core LangChain functionality
-#chromadb>=0.6.2           # Vector storage
-#sentence-transformers>=2.5.1 # Text embeddings
-tiktoken>=0.8.0            # Token counting
-openai>=1.59.7              # OpenAI direct API
-anthropic>=0.42.0           # Anthropic direct API
+langchain>=0.3.14               # LangChain core
+langchain-core>=0.3.29          # Core LangChain functionality
+langchain-community>=0.3.14     # Community extensions
+langchain-openai>=0.3.0         # OpenAI integration
+langchain-anthropic>=0.3.1      # Anthropic integration
+langchain-fireworks>=0.2.5      # Fireworks integration
+langchain-google-genai>=2.0.8   # Google AI integration
+tiktoken>=0.8.0                 # Token counting
+openai>=1.59.7                  # OpenAI direct API
+anthropic>=0.42.0               # Anthropic direct API
+
 
 # Storage & Database
 sqlalchemy>=2.0.37         # SQL toolkit and ORM
-alembic>=1.14.0           # Database migrations
-#pymongo>=4.10.1            # MongoDB client
-redis>=5.2.1              # Redis client
+alembic>=1.14.0            # Database migrations
+redis>=5.2.1               # Redis client
 boto3>=1.35.98             # AWS S3 storage
 google-cloud-storage>=2.19.0  # Google Cloud Storage
 
+
 # Security & Authentication
-passlib>=1.7.4            # Password hashing
-bcrypt>=4.1.2             # Password hashing
-python-jwt>=4.1.0         # JWT handling
-oauthlib>=3.2.2           # OAuth support
-pyotp>=2.9.0              # 2FA support
-keyring>=25.6.0           # Secure credential storage
+passlib>=1.7.4     # Password hashing
+bcrypt>=4.1.2      # Password hashing
+python-jwt>=4.1.0  # JWT handling
+oauthlib>=3.2.2    # OAuth support
+pyotp>=2.9.0       # 2FA support
+keyring>=25.6.0    # Secure credential storage
+
 
 # Additional Dependencies
 python-jose>=3.3.0      # JWT token handling for authentication
 cryptography>=44.0.0    # Encryption for secure storage
-aiohttp>=3.11.11         # Async HTTP client
-fastapi>=0.115.6       # API framework for extension
-uvicorn>=0.34.0        # ASGI server for FastAPI
-websockets>=14.1       # WebSocket support for real-time updates
-rich>=13.9.4           # Enhanced terminal output
+aiohttp>=3.11.11        # Async HTTP client
+fastapi>=0.115.6        # API framework for extension
+uvicorn>=0.34.0         # ASGI server for FastAPI
+websockets>=14.1        # WebSocket support for real-time updates
+rich>=13.9.4            # Enhanced terminal output
 typer>=0.15.1           # CLI interface building
-pyyaml>=6.0.2         # YAML configuration support
-jsonschema>=4.23.0    # JSON validation
-python-multipart>=0.0.20 # Form data handling
+pyyaml>=6.0.2           # YAML configuration support
+jsonschema>=4.23.0      # JSON validation
+python-multipart>=0.0.20# Form data handling
+
 
 # Async Dependencies
-asyncio>=3.4.3         # Async I/O support
-aiofiles>=24.1.0       # Async file operations
-aiodns>=3.2.0         # Async DNS resolver
-aiosqlite>=0.20.0     # Async SQLite database
-#motor>=3.6.0          # Async MongoDB driver
-asyncpg>=0.30.0       # Async PostgreSQL driver
-aioredis>=2.0.1       # Async Redis client
-backoff>=2.2.1        # Exponential backoff for async operations
-async-timeout>=5.0.1  # Timeout management for async operations
-pytest-asyncio>=0.25.2 # Async testing support
+asyncio>=3.4.3          # Async I/O support
+aiofiles>=24.1.0        # Async file operations
+aiodns>=3.2.0           # Async DNS resolver
+aiosqlite>=0.20.0       # Async SQLite database
+asyncpg>=0.30.0         # Async PostgreSQL driver
+aioredis>=2.0.1         # Async Redis client
+backoff>=2.2.1          # Exponential backoff for async operations
+async-timeout>=5.0.1    # Timeout management for async operations
+pytest-asyncio>=0.25.2  # Async testing support
+
 
 # Testing & Development
-pytest-cov>=6.0.0      # Test coverage
-pytest-mock>=3.14.0    # Mocking in tests
-pytest-xdist>=3.6.1    # Parallel testing
-black>=24.10.0         # Code formatting
-isort>=5.13.2          # Import sorting
-flake8>=7.1.1          # Code linting
-mypy>=1.14.1           # Static type checking
-pre-commit>=4.0.1     # Git hooks
+pytest-cov>=6.0.0       # Test coverage
+pytest-mock>=3.14.0     # Mocking in tests
+pytest-xdist>=3.6.1     # Parallel testing
+black>=24.10.0          # Code formatting
+isort>=5.13.2           # Import sorting
+flake8>=7.1.1           # Code linting
+mypy>=1.14.1            # Static type checking
+pre-commit>=4.0.1       # Git hooks
 
-# Optional Dependencies
+
+## Optional / Future / Phase 2 & 3 Dependencies
+# General Tools
 # tokencost>=0.1.17      # Token usage tracking
 # hatch>=1.14.0          # Build tool
 # build>=1.2.2           # Package building
-# RAG support - Future Plan
-# chromadb>=0.6.2        # Vector storage for RAG
-# sentence-transformers>=2.5.1  # Text embeddings for RAG
 
-# LinkedIn Integration & Automation
-#linkedin-scraper>=2.11.5  # LinkedIn profile scraping
-#python-linkedin-v2>=0.9.5 # LinkedIn API v2 SDK
-#linkedin-jobs-scraper>=5.0.1 # LinkedIn jobs scraping
-#pylinkedin>=0.3.4        # LinkedIn utility functions
-#linkedin-private-api>=1.1.2 # Unofficial LinkedIn API
-#selenium-linkedin>=2.5.0  # LinkedIn-specific Selenium tools
-#linkedin-auth>=1.0.1     # LinkedIn authentication helpers 
+
+# RAG Support
+# chromadb>=0.6.2              # Vector storage for RAG
+# sentence-transformers>=2.5.1 # Text embeddings for RAG
+# nltk>=3.8.1                  # NLP for advanced CV parsing
+# spacy>=3.7.4                 # Enhanced NLP for job description analysis
+# transformers>=4.38.2         # Advanced text classification for job matching
+
+#Linkedin Integration & Automation
+# linkedin-scraper>=2.11.5       # LinkedIn profile scraping
+# python-linkedin-v2>=0.9.5      # LinkedIn API v2 SDK
+# linkedin-jobs-scraper>=5.0.1   # LinkedIn jobs scraping
+# pylinkedin>=0.3.4              # LinkedIn utility functions
+# linkedin-private-api>=1.1.2    # Unofficial LinkedIn API
+# linkedin-auth>=1.0.1           # LinkedIn authentication helpers 
+# selenium-linkedin>=2.5.0       # LinkedIn-specific Selenium tools
+
+# Browser Anti-Detection
+# playwright-stealth>=1.0.0     # Anti-detection for Playwright
+# undetected-playwright>=0.1.0  # Undetectable Playwright automation
+# browser-cookie3>=0.20.1       # Browser cookie management for auth
+
+# Document Processing Enhancement
+# pdfminer>=20221105     # Enhanced PDF parsing
+# pdfplumber>=0.10.3     # Advanced PDF data extraction
+# python-docx>=1.0.1     # Word document CV processing
+
+
+# Analytics & Visualization
+# streamlit-authenticator>=0.2.3 # Auth for analytics dashboard
+# plotly>=5.19.0         # Interactive analytics visualizations
+# dash>=2.16.1           # Alternative dashboard framework
 
 # GUI Dependencies
-tk>=8.6.12            # Tkinter for GUI mode 
-tkinter-async>=0.3.0  # Async support for tkinter
-threading2>=0.3.1     # Enhanced threading support 
-tcl>=8.6.12          # Tcl support for tkinter 
+# tk>=8.6.12            # Tkinter for GUI mode 
+# tkinter-async>=0.3.0  # Async support for tkinter
+# threading2>=0.3.1     # Enhanced threading support 
+# tcl>=8.6.12          # Tcl support for tkinter 
+
