@@ -38,9 +38,11 @@ import logging
 from typing import Dict, Any, List
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import json
+import aiofiles
+import uuid
 
 @dataclass
 class TelemetryEvent:
@@ -50,30 +52,119 @@ class TelemetryEvent:
     success: bool
     duration_ms: float
     confidence_score: float = None
+    session_id: str = None
+    session_duration: float = None
 
 class TelemetryManager:
     def __init__(self, settings: Dict):
         self.logger = logging.getLogger(__name__)
         self.enabled = settings.get('telemetry', {}).get('enabled', True)
         self.storage_path = Path(settings.get('telemetry', {}).get('storage_path', './data/telemetry'))
+        self.metrics_history = []  # Store recent metrics
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+        
+        # Session management
+        self.session_id = str(uuid.uuid4())
+        self.session_start = datetime.now()
+        self.events_buffer = []  # In-memory event buffer
         
     async def track_event(self, event_type: str, data: Dict[str, Any], 
                          success: bool, confidence: float = None):
-        """Track a single telemetry event."""
+        """Track a single telemetry event with session data."""
         if not self.enabled:
             return
 
+        timestamp = datetime.now()
+        session_duration = (timestamp - self.session_start).total_seconds()
+
+        # Enhance data with session info
+        enhanced_data = {
+            **data,
+            "session_id": self.session_id,
+            "session_duration": session_duration
+        }
+
         event = TelemetryEvent(
-            timestamp=datetime.now(),
+            timestamp=timestamp,
             event_type=event_type,
-            data=data,
+            data=enhanced_data,
             success=success,
             duration_ms=time.time() * 1000,
-            confidence_score=confidence
+            confidence_score=confidence,
+            session_id=self.session_id,
+            session_duration=session_duration
         )
         
+        # Add to in-memory buffer
+        self.events_buffer.append(self._event_to_dict(event))
+        
+        # Log the event
+        print(f"[Telemetry] Event: {event_type} at {timestamp.isoformat()}")
+        
+        # Save events periodically
+        if len(self.events_buffer) >= 100:
+            await self._save_buffer()
+        
         await self._store_event(event)
-    
+
+    def _event_to_dict(self, event: TelemetryEvent) -> dict:
+        """Convert TelemetryEvent to dictionary format."""
+        return {
+            "timestamp": event.timestamp.isoformat(),
+            "event_type": event.event_type,
+            "data": event.data,
+            "success": event.success,
+            "duration_ms": event.duration_ms,
+            "confidence_score": event.confidence_score,
+            "session_id": event.session_id,
+            "session_duration": event.session_duration
+        }
+
+    async def _save_buffer(self) -> None:
+        """Save buffered events to storage."""
+        if not self.events_buffer:
+            return
+            
+        try:
+            events_file = self.storage_path / "events" / f"events_{self.session_id}.json"
+            events_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            async with aiofiles.open(events_file, 'w') as f:
+                await f.write(json.dumps(self.events_buffer))
+                
+            self.events_buffer = []  # Clear after saving
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save events buffer: {str(e)}")
+
+    def get_session_metrics(self) -> dict:
+        """Get metrics for the current session."""
+        event_counts = {}
+        total_duration = 0
+        error_count = 0
+        
+        for event in self.events_buffer:
+            # Count events by type
+            event_type = event["event_type"]
+            event_counts[event_type] = event_counts.get(event_type, 0) + 1
+            
+            # Track errors
+            if not event["success"]:
+                error_count += 1
+                
+            # Track durations
+            if "duration" in event["data"]:
+                total_duration += event["data"]["duration"]
+        
+        return {
+            "session_id": self.session_id,
+            "session_duration": (datetime.now() - self.session_start).total_seconds(),
+            "total_events": len(self.events_buffer),
+            "event_counts": event_counts,
+            "error_count": error_count,
+            "total_operation_duration": total_duration
+        }
+
     async def track_ai_performance(self, operation: str, 
                                  confidence: float, success: bool):
         """Specifically track AI operation performance."""
@@ -258,3 +349,30 @@ class TelemetryManager:
                 
         except Exception as e:
             self.logger.error(f"Failed to export metrics: {e}") 
+
+    async def get_recent_metrics(self, metric_type: str, timeframe_minutes: int = 15) -> list[float]:
+        """Get recent metrics of specified type within timeframe."""
+        await self._load_metrics()  # Load from disk before querying
+        cutoff_time = datetime.now() - timedelta(minutes=timeframe_minutes)
+        
+        return [
+            metric['value'] for metric in self.metrics_history
+            if (
+                metric['type'] == metric_type and
+                metric['timestamp'] >= cutoff_time
+            )
+        ]
+        
+    async def _load_metrics(self):
+        """Load metrics from disk."""
+        metrics_file = self.storage_path / 'metrics_history.json'
+        if metrics_file.exists():
+            async with aiofiles.open(metrics_file, 'r') as f:
+                content = await f.read()
+                self.metrics_history = json.loads(content)
+                
+    async def _save_metrics(self):
+        """Save metrics to disk."""
+        metrics_file = self.storage_path / 'metrics_history.json'
+        async with aiofiles.open(metrics_file, 'w') as f:
+            await f.write(json.dumps(self.metrics_history))

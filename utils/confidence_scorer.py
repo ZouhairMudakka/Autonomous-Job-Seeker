@@ -46,7 +46,8 @@ class ConfidenceScorer:
                  learning_pipeline: LearningPipeline,
                  use_gpt: bool = False,
                  gpt_model_name: str = "gpt-4",   # or 'gpt-3.5-turbo', etc.
-                 base_confidence: float = 0.6):
+                 base_confidence: float = 0.6,
+                 settings: dict = None):
         """
         Args:
             learning_pipeline (LearningPipeline): Reference to the learning pipeline
@@ -54,12 +55,14 @@ class ConfidenceScorer:
             use_gpt (bool): If True, we'll call GPT-based logic for advanced scoring.
             gpt_model_name (str): Which GPT model to call if use_gpt is True.
             base_confidence (float): A fallback or baseline confidence if no data.
+            settings (dict): Settings for telemetry and other configurations.
         """
         self.learning_pipeline = learning_pipeline
         self.use_gpt = use_gpt
         self.gpt_model_name = gpt_model_name
         self.base_confidence = base_confidence
-        self.telemetry = TelemetryManager()
+        self.settings = settings or {}
+        self.telemetry = TelemetryManager(self.settings)
 
         # For GPT calls, you might need an API key from environment or config
         # self.gpt_api_key = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY_HERE")
@@ -89,7 +92,7 @@ class ConfidenceScorer:
         else:
             final_conf = heuristic_conf
 
-        await self.calculate_confidence(action)
+        await self.calculate_confidence(action, context)
         return max(0.0, min(1.0, final_conf))  # clamp to [0,1]
 
     def _heuristic_confidence(self, action: str) -> float:
@@ -149,11 +152,37 @@ class ConfidenceScorer:
         gpt_adjustment = random.uniform(-0.1, 0.1)  # placeholder
         return max(0.0, min(1.0, heuristic_conf + gpt_adjustment))
 
-    async def calculate_confidence(self, operation_type: str):
-        score = await self._compute_score()
+    async def calculate_confidence(self, operation_type: str, context: dict = None):
+        """
+        Calculate confidence for an operation and track it in telemetry.
+        
+        Args:
+            operation_type (str): The type of operation being performed
+            context (dict): Additional context about the operation
+        """
+        score = await self._compute_score(operation_type, context)
+        
+        # Track the confidence calculation in telemetry
         await self.telemetry.track_event(
-            "confidence_calculation",
-            {"operation": operation_type, "score": score},
+            event_type="confidence_calculation",
+            data={
+                "operation": operation_type,
+                "score": score,
+                "context": context or {}
+            },
             success=True,
             confidence=score
         )
+        
+        return score
+
+    async def _compute_score(self, operation_type: str, context: dict = None) -> float:
+        """
+        Internal method to compute the confidence score.
+        Override this in subclasses for different scoring strategies.
+        """
+        # Default implementation uses learning pipeline data if available
+        success_rate = self.learning_pipeline.get_success_rate(operation_type)
+        if success_rate > 0:
+            return success_rate
+        return self.base_confidence

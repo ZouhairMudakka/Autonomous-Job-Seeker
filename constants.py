@@ -7,45 +7,67 @@ standardized log messages.
 """
 
 class TimingConstants:
+    """Timing constants for delays and timeouts."""
+    
+    # Base delays
+    BASE_RETRY_DELAY = 2000  # 2 seconds
+    ACTION_DELAY = 1000  # 1 second
+    POLL_INTERVAL = 2000     # 2 seconds in ms
+    
+    # Verification delays
+    VERIFICATION_DELAY = 1000      # 1 second
+    EXTENDED_VERIFICATION_DELAY = 3000  # 3 seconds
+    
+    # Wait periods
+    EXTENDED_WAIT_DELAY = 10000  # 10 seconds
+    RATE_LIMIT_DELAY = 5000  # 5 seconds
+    
+    # Default timeouts
+    DEFAULT_TIMEOUT = 30000  # 30 seconds
+    
+    # Human-like delays
+    HUMAN_DELAY_MIN = 0.5
+    HUMAN_DELAY_MAX = 2.0
+    
+    # Processing delays
+    PDF_PAGE_PARSE_DELAY = 100    # 0.1 seconds
+    FILE_READ_DELAY = 100         # 0.1 seconds
+    LLM_PROCESSING_DELAY = 1000   # 1 second
+    VALIDATION_DELAY = 500        # 0.5 seconds
+
     # -------------------------------------
     # Maximum wait / timeouts
     # -------------------------------------
-    MAX_WAIT_TIME = 10000  # ms (10s) - maximum wait for any operation
-    DEFAULT_TIMEOUT = 10000  # ms - default timeout for element waits
+    MAX_WAIT_TIME = 60000  # 1 minute
     NAVIGATION_TIMEOUT = 15000  # ms - special wait for page loads
     NETWORK_IDLE_TIMEOUT = 10000   # ms - wait for network activity to settle
 
     # -------------------------------------
     # Human-like interaction delays
     # -------------------------------------
-    HUMAN_DELAY_MIN = 0.3  # s - minimum delay for human-like interactions
-    HUMAN_DELAY_MAX = 1.0  # s - maximum delay for human-like interactions
     DRAG_HOLD_MIN = 0.5    # s - minimum time to hold during drag operations
     DRAG_HOLD_MAX = 1.0    # s - maximum time to hold during drag operations
 
     # -------------------------------------
     # Standard operation delays
     # -------------------------------------
-    POLL_INTERVAL = 0.5       # s - interval for checking conditions or queues
-    ACTION_DELAY = 2.0        # s - delay for major actions (clicks, submissions)
-    PAGE_TRANSITION_DELAY = 3.0  # s - delay for page transitions/navigation
-    TEXT_EXTRACTION_DELAY = 1.0  # s - delay after text extraction operations
-    SCREENSHOT_DELAY = 1.0    # s - delay before taking screenshots
+    PAGE_TRANSITION_DELAY = 2000  # 2 seconds
+    TEXT_EXTRACTION_DELAY = 1000  # 1 second
+    SCREENSHOT_DELAY = 500  # 0.5 seconds
     SCROLL_STEP_DELAY = 0.5   # s - delay between scroll steps
-    ERROR_DELAY = 3.0         # s - delay used after errors occur
+    ERROR_DELAY = 3000  # 3 seconds
 
     # -------------------------------------
     # Retry configurations
     # -------------------------------------
     MAX_RETRIES = 3                # maximum number of retry attempts
-    BASE_RETRY_DELAY = 2.0         # s - base delay for exponential backoff
     RETRY_BACKOFF_FACTOR = 2       # multiply delay by this factor each retry
 
     # -------------------------------------
     # Task Manager specific
     # -------------------------------------
-    QUEUE_CHECK_INTERVAL = 0.5  # s - how often to check the task queue
-    TASK_TIMEOUT = 300.0       # s - maximum time to wait for a task to complete
+    QUEUE_CHECK_INTERVAL = 1000  # 1 second
+    TASK_TIMEOUT = 300000  # 5 minutes
 
     # -------------------------------------
     # Form-specific
@@ -53,7 +75,7 @@ class TimingConstants:
     FORM_SUBMIT_DELAY = 2.0  # s - delay after form submission
     FORM_FIELD_DELAY = 0.5   # s - delay between filling form fields
     FORM_VALIDATION_DELAY = 1.0  # s - delay to wait for form validation
-    FILE_UPLOAD_DELAY = 3.0   # s - delay after file upload operations
+    FILE_UPLOAD_DELAY = 2000  # 2 seconds
 
     # -------------------------------------
     # LinkedIn specific
@@ -69,7 +91,7 @@ class TimingConstants:
     # Cookie and Modal handling
     # -------------------------------------
     COOKIE_BANNER_TIMEOUT = 3000    # ms - time to wait for cookie banner
-    MODAL_TRANSITION_DELAY = 1.0    # s - wait for modal animations
+    MODAL_TRANSITION_DELAY = 1000  # 1 second
     POPUP_CHECK_DELAY = 0.5         # s - interval to check for popups
 
     # Add these missing constants used in LinkedInAgent
@@ -120,20 +142,41 @@ class Messages:
     """
     Standard messages used across agents for consistent logging.
     """
+    # Session messages
     PAUSE_MESSAGE = "Pausing operations..."
     RESUME_MESSAGE = "Resuming operations..."
+    
+    # Operation status
     TIMEOUT_MESSAGE = "Operation timed out after {} seconds."
     RETRY_MESSAGE = "Attempt {}/{} failed: {}"
     SUCCESS_MESSAGE = "Operation completed successfully."
-    # If you want standard text for errors, logs, etc.:
+    
+    # Authentication/Security
     CAPTCHA_MESSAGE = "Captcha encountered, manual solve needed."
     LOGOUT_MESSAGE = "User is logged out, re-login required."
-
-    # Add these missing messages
+    
+    # Error messages
     SEARCH_ERROR = "Failed to perform job search: {}"
     FORM_ERROR = "Form submission failed: {}"
     NETWORK_ERROR = "Network connection issue: {}"
     ELEMENT_NOT_FOUND = "Element not found: {}"
+    
+    # Task management
     TASK_CREATED = "Created new task: {}"
     TASK_COMPLETED = "Task completed successfully: {}"
     TASK_FAILED = "Task failed: {}"
+    
+    # Plan execution
+    PLAN_STARTED = "Starting execution of master plan: {}"
+    PLAN_MODIFIED = "Plan modified due to conditions: {}"
+    PLAN_COMPLETED = "Master plan completed successfully"
+    PLAN_FAILED = "Master plan failed: {}"
+    
+    # Rate limiting
+    RATE_LIMIT_DETECTED = "Rate limiting detected, adding delays"
+    RATE_LIMIT_RESOLVED = "Rate limiting condition resolved"
+    
+    # State management
+    STATE_SAVED = "Session state saved successfully"
+    STATE_RESTORED = "Session state restored successfully"
+    STATE_INVALID = "Invalid session state: {}"
