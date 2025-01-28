@@ -67,6 +67,7 @@ from pathlib import Path
 from utils.telemetry import TelemetryManager
 from agents.ai_navigator import AINavigator
 from datetime import datetime, timedelta
+from agents.cv_parser_agent import CVParserAgent
 
 class Controller:
     def __init__(self, settings, page):
@@ -91,6 +92,7 @@ class Controller:
         # Initialize AI Navigator
         self.ai_navigator = AINavigator(
             page=self.page,
+            settings=self.settings,
             min_confidence=settings.get('min_confidence', 0.8),
             max_retries=self.max_retries
         )
@@ -105,6 +107,9 @@ class Controller:
         self.pause_state = {}
 
         self.telemetry = TelemetryManager(settings)
+
+        # Replace doc_processor with cv_parser
+        self.cv_parser = CVParserAgent(settings)
 
     async def start_session(self):
         """
@@ -243,8 +248,8 @@ class Controller:
             bool: True if application was successful, False otherwise
         """
         try:
-            # First prepare and parse CV
-            cv_path, cv_data = await self.doc_processor.prepare_cv_for_upload(cv_path)
+            # Use cv_parser instead of doc_processor
+            cv_path, cv_data = await self.cv_parser.prepare_cv(cv_path)
             
             # Log CV processing
             await self.tracker_agent.log_activity(
@@ -296,42 +301,82 @@ class Controller:
             print(f"[Controller] Application error: {str(e)}")
             return False
 
-    async def run_master_plan(self, plan_steps: list[str]):
+    async def run_master_plan(self, plan_steps: list[str]) -> bool:
         """
-        Execute a series of steps according to the AI Master-Plan.
+        Execute the AI Master-Plan with proper error handling and retries.
         
         Args:
-            plan_steps: List of step names to execute (e.g., ["check_login", "search_jobs"])
-        
+            plan_steps: List of steps to execute
+            
         Returns:
-            bool: True if all steps completed successfully, False otherwise
+            bool: True if plan executed successfully
         """
         try:
+            # 1. Validate and modify plan based on conditions
+            modified_plan = await self._modify_plan_for_conditions(plan_steps)
+            
+            # 2. Log plan execution start
             await self.tracker_agent.log_activity(
                 activity_type='master_plan',
-                details=f'Starting master plan execution: {plan_steps}',
+                details=f'Starting plan execution: {modified_plan}',
                 status='info',
                 agent_name='Controller'
             )
-
-            # Execute the plan using AI Navigator
-            success, confidence = await self.ai_navigator.execute_master_plan(plan_steps)
-
-            # Log the result
-            status = 'success' if success else 'error'
+            
+            # 3. Execute plan with AI Navigator
+            attempt = 0
+            last_error = None
+            
+            while attempt < self.max_retries:
+                try:
+                    success, confidence = await self.ai_navigator.execute_master_plan(modified_plan)
+                    
+                    if success:
+                        await self.tracker_agent.log_activity(
+                            activity_type='master_plan',
+                            details=f'Plan completed successfully with confidence {confidence}',
+                            status='success',
+                            agent_name='Controller'
+                        )
+                        return True
+                        
+                    # If not successful but no exception, try again with delay
+                    attempt += 1
+                    if attempt < self.max_retries:
+                        retry_delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                        await asyncio.sleep(retry_delay / 1000)  # Convert ms to seconds
+                        
+                except Exception as e:
+                    last_error = str(e)
+                    attempt += 1
+                    
+                    await self.tracker_agent.log_activity(
+                        activity_type='master_plan',
+                        details=f'Plan attempt {attempt} failed: {last_error}',
+                        status='error',
+                        agent_name='Controller'
+                    )
+                    
+                    if attempt < self.max_retries:
+                        retry_delay = self.retry_delay * (2 ** attempt)
+                        await asyncio.sleep(retry_delay / 1000)
+                        
+                        # Check if we need to modify plan after error
+                        modified_plan = await self._handle_rate_limiting(modified_plan)
+            
+            # If we're here, we've exhausted retries
             await self.tracker_agent.log_activity(
                 activity_type='master_plan',
-                details=f'Master plan {"completed" if success else "failed"} with confidence: {confidence}',
-                status=status,
+                details=f'Plan failed after {attempt} attempts. Last error: {last_error}',
+                status='failed',
                 agent_name='Controller'
             )
-
-            return success
-
+            return False
+            
         except Exception as e:
             await self.tracker_agent.log_activity(
                 activity_type='master_plan',
-                details=f'Master plan execution error: {str(e)}',
+                details=f'Critical error in plan execution: {str(e)}',
                 status='error',
                 agent_name='Controller'
             )
@@ -443,19 +488,44 @@ class Controller:
             # On error, assume it's not a high activity period
             return False
 
-    async def _save_session_state(self):
+    async def _save_session_state(self) -> bool:
         """
-        Save current session state for possible resume.
-        Includes:
-        - Current plan and step
-        - Job search context
-        - Application progress
-        - Timing information
-        - Success/failure metrics
+        Save the current session state for possible restoration later.
+
+        The session state includes:
+          - A 'session_version' for compatibility checks.
+          - Timestamps and plan progress (current_plan, current_step, completed_steps).
+          - Job search context (title, location, job_url, cv_path).
+          - Application progress (form_data, uploaded_files, validation_status).
+          - Basic metrics (start_time, attempts, success_rate).
+
+        Steps:
+          1. Check if current state needs recovery
+          2. Build and validate state object
+          3. Save state with version info
+          4. Verify saved state
+
+        Returns:
+            bool: True if the session state was saved successfully, False otherwise.
         """
         try:
+            # Check if we need recovery before saving
+            recovery_success, _ = await self.ai_navigator.execute_master_plan(["recovery_check"])
+            if not recovery_success:
+                await self.tracker_agent.log_activity(
+                    activity_type='session_state',
+                    details='Cannot save state: recovery needed',
+                    status='error',
+                    agent_name='Controller'
+                )
+                print("[Controller] Cannot save state: recovery needed")
+                return False
+
             # Build state object
             self.pause_state = {
+                # Add a version key so we can detect mismatches if we change the schema
+                'session_version': "1.0",
+                
                 'timestamp': datetime.now().isoformat(),
                 
                 # Plan execution state
@@ -485,16 +555,40 @@ class Controller:
                     'success_rate': self.settings.get('success_rate', 0.0)
                 }
             }
+
+            # Verify the state we're about to save
+            is_valid, error_msg = await self._validate_session_state(self.pause_state)
+            if not is_valid:
+                await self.tracker_agent.log_activity(
+                    activity_type='session_state',
+                    details=f'Cannot save invalid state: {error_msg}',
+                    status='error',
+                    agent_name='Controller'
+                )
+                print(f"[Controller] Cannot save invalid state: {error_msg}")
+                return False
             
-            # Log state save
+            # Verify save with AI Navigator
+            verify_success, confidence = await self.ai_navigator.execute_master_plan(["verify_action"])
+            if not verify_success:
+                await self.tracker_agent.log_activity(
+                    activity_type='session_state',
+                    details='State save verification failed',
+                    status='error',
+                    agent_name='Controller'
+                )
+                print("[Controller] State save verification failed")
+                return False
+            
+            # Log successful save
             await self.tracker_agent.log_activity(
                 activity_type='session_state',
-                details='Session state saved',
+                details=f'Session state saved and verified successfully (confidence: {confidence:.2f})',
                 status='success',
                 agent_name='Controller'
             )
             
-            print("[Controller] Session state saved successfully")
+            print("[Controller] Session state saved and verified successfully.")
             return True
             
         except Exception as e:
@@ -510,71 +604,112 @@ class Controller:
     async def _validate_session_state(self, state: dict) -> tuple[bool, str]:
         """
         Validate session state before restoration.
+
+        This method checks:
+          1. Required fields (e.g., session_version, timestamp, current_plan, job_data).
+          2. session_version compatibility.
+          3. Timestamp freshness (older than 1 hour is considered stale).
+          4. Minimal job data fields (title, location).
+          5. Existence of CV path if specified.
+          6. Plan/step consistency.
+          7. Data-type checks for lists/dicts in sub-fields.
         
         Args:
-            state: Dictionary containing session state
-            
+            state (dict): The dictionary containing the saved session state.
+
         Returns:
-            tuple[bool, str]: (is_valid, error_message)
+            (bool, str): (is_valid, error_message) 
+                         is_valid = True if state is usable, 
+                         error_message = '' or reason why invalid.
         """
         try:
-            # 1. Check required fields
-            required_fields = ['timestamp', 'current_plan', 'job_data']
+            # 1. Check required top-level fields
+            required_fields = ['session_version', 'timestamp', 'current_plan', 'job_data']
             for field in required_fields:
                 if field not in state:
-                    return False, f"Missing required field: {field}"
+                    return False, f"Missing required field '{field}' in session state"
 
-            # 2. Validate timestamp
+            # 2. Check session_version
+            # If we bump to '2.0' in future, we can do a basic compare
+            if state['session_version'] != "1.0":
+                return False, f"Incompatible session version: {state['session_version']}"
+
+            # 3. Validate timestamp not older than 1 hour
             saved_time = datetime.fromisoformat(state['timestamp'])
             time_diff = datetime.now() - saved_time
-            
             if time_diff > timedelta(hours=1):
                 return False, "State is too old (> 1 hour)"
-            
-            # 3. Validate job data
+
+            # 4. Minimal job data check
             job_data = state.get('job_data', {})
             if not job_data.get('title') or not job_data.get('location'):
-                return False, "Missing job search parameters"
-            
-            # 4. Validate file paths
+                return False, "Missing job search parameters ('title'/'location')"
+
+            # 5. Validate file paths
             cv_path = job_data.get('cv_path')
-            if cv_path and not Path(cv_path).exists():
-                return False, "CV file no longer exists at saved path"
-            
-            # 5. Validate plan consistency
+            if cv_path:
+                path_obj = Path(cv_path)
+                # It's optional to require existence, but let's keep it
+                if not path_obj.exists():
+                    return False, f"CV file no longer exists at saved path: {cv_path}"
+
+            # 6. Plan/step consistency
+            current_plan = state['current_plan']
             current_step = state.get('current_step', 0)
-            current_plan = state.get('current_plan', [])
+            if not isinstance(current_plan, list):
+                return False, "current_plan must be a list"
             if current_step > len(current_plan):
-                return False, "Invalid step index for saved plan"
-            
-            # 6. Check for data corruption
+                return False, "Invalid step index for saved plan (current_step > plan length)"
+
+            # 7. Check data types for completed_steps, metrics, and application_state
             if not isinstance(state.get('completed_steps', []), list):
-                return False, "Data corruption in completed steps"
-            
+                return False, "Data corruption in 'completed_steps' (not a list)"
+
             if not isinstance(state.get('metrics', {}), dict):
-                return False, "Data corruption in metrics"
-            
-            # 7. Validate application state if exists
+                return False, "Data corruption in 'metrics' (not a dict)"
+
             app_state = state.get('application_state', {})
-            if app_state:
-                if not isinstance(app_state.get('form_data', {}), dict):
-                    return False, "Invalid form data format"
-                if not isinstance(app_state.get('uploaded_files', []), list):
-                    return False, "Invalid uploaded files format"
-            
-            return True, "State validation successful"
-            
+            if not isinstance(app_state, dict):
+                return False, "Data corruption in 'application_state' (not a dict)"
+
+            # Inside app_state, check subfields
+            if not isinstance(app_state.get('form_data', {}), dict):
+                return False, "Invalid 'form_data' format"
+            if not isinstance(app_state.get('uploaded_files', []), list):
+                return False, "Invalid 'uploaded_files' format"
+            if not isinstance(app_state.get('validation_status', {}), dict):
+                return False, "Invalid 'validation_status' format"
+
+            return True, "State validation successful."
+        
         except Exception as e:
             return False, f"Validation error: {str(e)}"
 
-    async def _restore_session_state(self):
-        """Restore session from saved state with validation."""
+    async def _restore_session_state(self) -> bool:
+        """
+        Restore session state from self.pause_state (if any), 
+        after validating the data.
+
+        Steps:
+         1. Check if self.pause_state is non-empty.
+         2. Validate the stored state with _validate_session_state(...).
+         3. If valid, restore:
+            - Plan execution state (current_plan, current_step, completed_steps).
+            - Job data (title, location, job_url, cv_path).
+            - Application progress (form_data, etc.)
+            - Metrics (start_time, attempts, success_rate).
+         4. Verify restoration with AI Navigator.
+         5. Log success/failure.
+
+        Returns:
+            bool: True if restoration succeeded, False otherwise.
+        """
         try:
             if not self.pause_state:
-                print("[Controller] No saved state to restore")
+                print("[Controller] No saved state to restore.")
                 return False
-            
-            # Validate state before restoration
+
+            # Validate state
             is_valid, error_msg = await self._validate_session_state(self.pause_state)
             if not is_valid:
                 await self.tracker_agent.log_activity(
@@ -585,13 +720,12 @@ class Controller:
                 )
                 print(f"[Controller] State validation failed: {error_msg}")
                 return False
-            
-            # Restore plan execution state
+
+            # If valid, restore data
             self.current_plan = self.pause_state.get('current_plan', [])
             self.current_step = self.pause_state.get('current_step', 0)
             self.completed_steps = self.pause_state.get('completed_steps', [])
-            
-            # Restore job search context
+
             job_data = self.pause_state.get('job_data', {})
             self.settings.update({
                 'job_title': job_data.get('title'),
@@ -599,34 +733,48 @@ class Controller:
                 'job_url': job_data.get('url'),
                 'cv_path': Path(job_data.get('cv_path', '')) if job_data.get('cv_path') else None
             })
-            
-            # Restore application progress
-            application_state = self.pause_state.get('application_state', {})
+
+            app_state = self.pause_state.get('application_state', {})
             self.settings.update({
-                'form_data': application_state.get('form_data', {}),
-                'uploaded_files': application_state.get('uploaded_files', []),
-                'validation_status': application_state.get('validation_status', {})
+                'form_data': app_state.get('form_data', {}),
+                'uploaded_files': app_state.get('uploaded_files', []),
+                'validation_status': app_state.get('validation_status', {})
             })
-            
-            # Restore metrics
+
             metrics = self.pause_state.get('metrics', {})
             self.settings.update({
                 'start_time': metrics.get('start_time'),
                 'attempts': metrics.get('attempts', 0),
                 'success_rate': metrics.get('success_rate', 0.0)
             })
-            
-            # Log successful restoration
+
+            # Verify restoration with AI Navigator
+            success, confidence = await self.ai_navigator.execute_master_plan([
+                "recovery_check",
+                "state_restoration",
+                "verify_action"
+            ])
+
+            if not success:
+                await self.tracker_agent.log_activity(
+                    activity_type='session_state',
+                    details='State restored but verification failed',
+                    status='warning',
+                    agent_name='Controller'
+                )
+                print("[Controller] State restored but verification failed.")
+                return False
+
+            # Log success
             await self.tracker_agent.log_activity(
                 activity_type='session_state',
-                details='Session state restored',
+                details=f'Session state restored and verified successfully (confidence: {confidence:.2f})',
                 status='success',
                 agent_name='Controller'
             )
-            
-            print("[Controller] Session state restored successfully")
+            print("[Controller] Session state restored and verified successfully.")
             return True
-            
+
         except Exception as e:
             await self.tracker_agent.log_activity(
                 activity_type='session_state',
