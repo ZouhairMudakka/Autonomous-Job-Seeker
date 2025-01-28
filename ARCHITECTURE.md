@@ -47,6 +47,35 @@ flowchart LR
     LinkedInAgent -- "Read user preferences" --> UserProfileAgent
 ```
 
+## Sequence Flow Example
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as User/CLI
+    participant C as Controller
+    participant T as TaskManager
+    participant LA as LinkedInAgent
+    participant CA as CredentialsAgent
+    participant FF as FormFillerAgent
+    participant TK as TrackerAgent
+
+    UI->>C: "Run LinkedIn Flow (job_title, location)"
+    note over C: Possibly read user_profile info or <br> do an AI Master-Plan
+    C->>T: create/run task (search_jobs_and_apply)
+    T->>LA: search_jobs_and_apply(job_title, location)
+
+    LA->>TK: log "Starting job search"
+    LA->>CA: (if captcha or login needed) handle_captcha/login
+    CA->>TK: log "captcha solved / login complete"
+    LA->>FF: fill forms for "Easy Apply"
+    FF->>TK: log "Form fields filled"
+    LA->>TK: log "Job applied or skipped"
+    T->>C: job_search_and_apply done
+    C->>TK: log_activity "Flow success"
+    note over C: Then more flows or end_session
+```
+
 ## Architecture Notes
 
 ### Key Components
