@@ -1,15 +1,60 @@
 """
 Main Controller Module (Async, MVP Version)
 
-Coordinates the automation flow across multiple agents.
-Uses a TaskManager (task_manager.py) for concurrency or scheduling.
+Coordinates the automation flow across multiple agents using a lightweight AI Master-Plan.
+Uses a TaskManager for concurrency or scheduling.
+
+Architecture Overview:
+--------------------
+This module maintains separation of concerns across multiple agents while providing
+centralized orchestration and error handling.
+
+**New Master-Plan Integration (MVP)**
+-------------------------------------
+We add a minimal "AI Master-Plan" logic that outlines the major steps (e.g. "Login → 
+Search → Apply"), while still relying on site-specific fallback (like LinkedInLocators).
+
+1) We generate a short plan (list of steps) for each flow.
+2) We pass it to the `ai_navigator` or handle it directly in the controller.
+3) Each step can use confidence-based navigation or direct fallback.
+4) On error or low confidence, the Master-Plan either retries or proceeds with site-specific logic.
 
 TODO (AI Integration):
+--------------------
 - Initialize AI Navigator and Learning Pipeline
 - Add confidence-based decision making
 - Setup proper AI fallback mechanisms
 - Add AI-specific session management
 - Integrate with unified logging system
+- (Future) Detailed GPT-based planning for each site
+
+MVP Implementation:
+-----------------
+- The plan is small (2-4 steps).
+- If a step fails (captcha or something else), we either retry or fallback to manual CredentialsAgent.
+- Primary focus on robust error handling and fallback mechanisms
+- Maintains compatibility with existing agent-based architecture
+
+Example:
+    plan = ["check_captcha", "search_jobs", "apply_jobs"]
+    # Each step calls an agent or ai_navigator to do the actual actions.
+
+Usage:
+------
+Controller is typically instantiated once per session:
+    controller = Controller(settings, page)
+    await controller.start_session()
+    await controller.run_master_plan(["check_login", "search_jobs", "apply_form"])
+    ...
+
+(You can also call run_linkedin_flow, etc. as before.)
+
+Dependencies:
+------------
+- TaskManager: For concurrency and scheduling
+- Multiple Agents: LinkedIn, Credentials, Tracker, etc.
+- AI Navigator: For confidence-based navigation
+- DOM Service: For direct page interactions
 """
 
 import asyncio
