@@ -65,6 +65,7 @@ from constants import TimingConstants, Messages
 from orchestrator.task_manager import TaskManager
 from pathlib import Path
 from utils.telemetry import TelemetryManager
+from agents.ai_navigator import AINavigator
 
 class Controller:
     def __init__(self, settings, page):
@@ -84,6 +85,13 @@ class Controller:
             default_timeout=settings.get('default_timeout', TimingConstants.DEFAULT_TIMEOUT),
             min_delay=settings.get('min_delay', TimingConstants.HUMAN_DELAY_MIN),
             max_delay=settings.get('max_delay', TimingConstants.HUMAN_DELAY_MAX)
+        )
+
+        # Initialize AI Navigator
+        self.ai_navigator = AINavigator(
+            page=self.page,
+            min_confidence=settings.get('min_confidence', 0.8),
+            max_retries=self.max_retries
         )
 
         # Task management and timing configurations
@@ -127,18 +135,26 @@ class Controller:
         while attempt < self.max_retries:
             try:
                 await asyncio.sleep(TimingConstants.ACTION_DELAY)
-                task = await self.task_manager.create_task(
-                    self.linkedin_agent.search_jobs_and_apply(job_title, location)
-                )
-                result = await self.task_manager.run_task(task)
-
-                await self.tracker_agent.log_activity(
-                    activity_type='job_search_apply',
-                    details=Messages.SUCCESS_MESSAGE,
-                    status='success',
-                    agent_name='Controller'
-                )
-                break
+                
+                # Use AI Master-Plan for the flow
+                plan_steps = ["check_login", "open_job_page", "fill_search", "apply"]
+                success = await self.run_master_plan(plan_steps)
+                
+                if success:
+                    await self.tracker_agent.log_activity(
+                        activity_type='job_search_apply',
+                        details=Messages.SUCCESS_MESSAGE,
+                        status='success',
+                        agent_name='Controller'
+                    )
+                    break
+                else:
+                    # Fallback to traditional flow if master plan fails
+                    task = await self.task_manager.create_task(
+                        self.linkedin_agent.search_jobs_and_apply(job_title, location)
+                    )
+                    result = await self.task_manager.run_task(task)
+                    break
 
             except Exception as e:
                 attempt += 1
@@ -245,6 +261,47 @@ class Controller:
             await self.tracker_agent.log_activity(
                 activity_type='application',
                 details=f'Error in application: {str(e)}',
+                status='error',
+                agent_name='Controller'
+            )
+            return False
+
+    async def run_master_plan(self, plan_steps: list[str]):
+        """
+        Execute a series of steps according to the AI Master-Plan.
+        
+        Args:
+            plan_steps: List of step names to execute (e.g., ["check_login", "search_jobs"])
+        
+        Returns:
+            bool: True if all steps completed successfully, False otherwise
+        """
+        try:
+            await self.tracker_agent.log_activity(
+                activity_type='master_plan',
+                details=f'Starting master plan execution: {plan_steps}',
+                status='info',
+                agent_name='Controller'
+            )
+
+            # Execute the plan using AI Navigator
+            success, confidence = await self.ai_navigator.execute_master_plan(plan_steps)
+
+            # Log the result
+            status = 'success' if success else 'error'
+            await self.tracker_agent.log_activity(
+                activity_type='master_plan',
+                details=f'Master plan {"completed" if success else "failed"} with confidence: {confidence}',
+                status=status,
+                agent_name='Controller'
+            )
+
+            return success
+
+        except Exception as e:
+            await self.tracker_agent.log_activity(
+                activity_type='master_plan',
+                details=f'Master plan execution error: {str(e)}',
                 status='error',
                 agent_name='Controller'
             )

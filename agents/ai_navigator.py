@@ -81,12 +81,14 @@ Master-Plan Example:
         print("Master-Plan encountered an error or low confidence step.")
 """
 
+from typing import Tuple
 from utils.telemetry import TelemetryManager
 from locators.linkedin_locators import LinkedInLocators
 from utils.dom.dom_service import DomService
 
 class AINavigator:
     def __init__(self, page, min_confidence=0.8, max_retries=3):
+        """Initialize navigator with required services."""
         self.page = page
         self.min_confidence = min_confidence
         self.max_retries = max_retries
@@ -95,6 +97,7 @@ class AINavigator:
         # Initialize services
         self.dom_service = DomService(page)
         self.telemetry = TelemetryManager()
+        self.locators = LinkedInLocators()  # Added for fallback scenarios
         
     async def navigate(self, action, context):
         """
@@ -122,7 +125,7 @@ class AINavigator:
             "navigation_attempt",
             {"target": target},
             success=True,
-            confidence=self.confidence_score
+            confidence=self.min_confidence
         )
 
     async def _execute_action(self, action):
@@ -171,4 +174,116 @@ class AINavigator:
     async def _handle_low_confidence(self, action, confidence):
         """Handle cases where confidence is below threshold."""
         print(f"[AINavigator] Low confidence={confidence}. Aborting.")
-        return False, confidence 
+        return False, confidence
+
+    async def execute_master_plan(self, plan_steps) -> Tuple[bool, float]:
+        """
+        Execute a series of navigation steps in order.
+        Returns (success: bool, confidence: float).
+        """
+        overall_confidence = 1.0
+        
+        # Step-to-action mapping
+        step_actions = {
+            "open_job_page": self._navigate_to_jobs_page,
+            "fill_search": self._fill_search_form,
+            "apply": self._click_apply_button,
+            "check_login": self._verify_login_status
+        }
+        
+        for step in plan_steps:
+            try:
+                if step not in step_actions:
+                    print(f"[AINavigator] Unknown step: '{step}'")
+                    return False, 0.0
+                
+                action_method = step_actions[step]
+                context = {"step": step}
+                
+                success, confidence = await self.navigate(action_method, context)
+                overall_confidence *= confidence
+                
+                if not success:
+                    print(f"[AINavigator] Step failed: {step}")
+                    return False, overall_confidence
+                    
+            except Exception as e:
+                print(f"[AINavigator] Error in step '{step}': {str(e)}")
+                return False, overall_confidence
+        
+        return True, overall_confidence
+
+    async def _navigate_to_jobs_page(self):
+        """Navigate to LinkedIn's jobs page."""
+        print("[AINavigator] Navigating to jobs page...")
+        try:
+            await self.dom_service.goto(self.locators.JOBS_URL)
+            found = await self.dom_service.check_element_present(
+                self.locators.JOBS_SEARCH_RESULTS,
+                timeout=5000
+            )
+            if not found:
+                raise Exception("Jobs page not loaded properly")
+            return True
+        except Exception as e:
+            print(f"[AINavigator] Jobs page navigation failed: {str(e)}")
+            raise
+
+    async def _fill_search_form(self):
+        """Fill out job search form."""
+        print("[AINavigator] Filling search form...")
+        try:
+            await self.dom_service.type_text(
+                self.locators.JOB_TITLE_INPUT,
+                self.settings.get('job_title', '')
+            )
+            await self.dom_service.type_text(
+                self.locators.LOCATION_INPUT,
+                self.settings.get('location', '')
+            )
+            await self.dom_service.click_element(self.locators.SEARCH_BUTTON)
+            
+            # Wait for results
+            found = await self.dom_service.check_element_present(
+                self.locators.JOBS_SEARCH_RESULTS,
+                timeout=5000
+            )
+            if not found:
+                raise Exception("Search results not loaded")
+            return True
+        except Exception as e:
+            print(f"[AINavigator] Search form fill failed: {str(e)}")
+            raise
+
+    async def _click_apply_button(self):
+        """Click apply button on job posting."""
+        print("[AINavigator] Clicking apply button...")
+        try:
+            await self.dom_service.click_element(self.locators.APPLY_BUTTON)
+            
+            # Verify apply modal opened
+            modal_open = await self.dom_service.check_element_present(
+                self.locators.APPLY_MODAL,
+                timeout=3000
+            )
+            if not modal_open:
+                raise Exception("Apply modal did not appear")
+            return True
+        except Exception as e:
+            print(f"[AINavigator] Apply button click failed: {str(e)}")
+            raise
+
+    async def _verify_login_status(self):
+        """Verify user is logged in."""
+        print("[AINavigator] Verifying login status...")
+        try:
+            is_logged_in = await self.dom_service.check_element_present(
+                self.locators.PROFILE_BUTTON,
+                timeout=3000
+            )
+            if not is_logged_in:
+                raise Exception("User not logged in")
+            return True
+        except Exception as e:
+            print(f"[AINavigator] Login verification failed: {str(e)}")
+            raise 
