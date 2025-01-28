@@ -49,22 +49,11 @@ from utils.dom.dom_service import DomService
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
 
 class FormFillerAgent:
-    def __init__(
-        self,
-        dom_service: DomService,
-        default_wait: float = 10.0,  # seconds
-        raise_on_error: bool = False
-    ):
-        """
-        Args:
-            dom_service (DomService): A DomService instance to handle all DOM interactions.
-            default_wait (float): Default wait time in seconds for element lookups (unused here, but can be stored if needed).
-            raise_on_error (bool): If True, raise exceptions on first error.
-                                   If False, log error and continue filling other fields.
-        """
+    def __init__(self, dom_service: DomService, settings: dict = None):
+        """Initialize form filler with DOM service and settings."""
         self.dom_service = dom_service
-        self.default_wait = default_wait
-        self.raise_on_error = raise_on_error
+        self.settings = settings or {}
+        self.telemetry = TelemetryManager(self.settings)
 
         # Standard delays
         self.human_delay_min = 0.3  # seconds
@@ -73,7 +62,8 @@ class FormFillerAgent:
         self.transition_delay = 3.0 # seconds (for page transitions)
         self.poll_interval = 0.5    # seconds (for condition checks)
 
-        self.telemetry = TelemetryManager()
+        self.default_wait = 10.0  # seconds
+        self.raise_on_error = False
 
     async def fill_form(self, form_data: Dict[str, Any], form_mapping: Dict[str, Dict[str, Any]]):
         """
