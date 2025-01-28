@@ -76,6 +76,52 @@ sequenceDiagram
     note over C: Then more flows or end_session
 ```
 
+## Entry Points and User Interaction Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User
+    participant Main as main.py
+    participant Mode as Mode Selector
+    participant Auto as Automatic Mode
+    participant CLI as Full Control Mode
+    participant GUI as GUI Mode
+    participant C as Controller
+    participant B as Browser Setup
+
+    User->>Main: Start Application
+    Main->>B: Initialize Browser
+    B-->>Main: Browser & Page Ready
+    
+    Main->>Mode: Display Mode Selection
+    note over Mode: 1) Automatic Mode<br>2) Full Control Mode<br>3) GUI Mode<br>4) Exit
+    
+    alt Automatic Mode
+        Mode->>Auto: run_automatic_mode()
+        Auto->>C: run_linkedin_flow(job_title, location)
+        C-->>Auto: Flow Complete
+        Auto-->>Mode: Return to Mode Selection
+    else Full Control Mode
+        Mode->>CLI: run_full_control_mode()
+        note over CLI: Interactive CLI Session<br>User types commands
+        CLI->>C: Various Controller Commands
+        C-->>CLI: Command Results
+        CLI-->>Mode: Return to Mode Selection
+    else GUI Mode
+        Mode->>GUI: run_gui_mode()
+        note over GUI: MinimalGUI Window<br>Start/Resume/Pause/Stop
+        GUI->>C: Controller Actions
+        C-->>GUI: Action Results
+        GUI-->>Mode: Return to Mode Selection
+    else Exit
+        Mode->>Main: Cleanup and Exit
+    end
+
+    Main->>C: end_session()
+    Main->>B: Cleanup Browser
+```
+
 ## Architecture Notes
 
 ### Key Components
