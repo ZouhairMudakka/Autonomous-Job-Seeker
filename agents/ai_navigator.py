@@ -1,5 +1,5 @@
 """
-AI-driven navigation with confidence scoring and DOM interaction management.
+AI-driven navigation with confidence scoring, DOM interaction, and a minimal AI Master-Plan.
 
 Architecture:
 ------------
@@ -9,33 +9,43 @@ separation of concerns:
 1. Navigation Logic (This Module)
    - Confidence-based decision making
    - Fallback strategy orchestration
+   - Minimal AI Master-Plan for multi-step flows (MVP)
    - Navigation outcome tracking
    - Error recovery management
 
 2. DOM Interactions (via DomService)
    - Element discovery and interaction
-   - Highlighting and visual feedback
+   - Optional bounding-box annotation (in future expansions)
    - Basic DOM operations (click, fill, etc.)
-   - DOM tree traversal
+   - DOM tree traversal if needed
+   - Highlighting and visual feedback
+   - Basic DOM operations
 
-3. Selector Management (via LinkedInLocators)
-   - Centralized selector definitions
+3. Selector Management (via LinkedInLocators or fallback)
+   - Centralized selector definitions for site-specific interactions
    - Platform-specific element paths
+   - Site-based fallback if Master-Plan or bounding-box fails
    - Selector versioning and fallbacks
 
-Current Status: Active Development
---------------------------------
-Primary focus is on implementing robust DOM interaction patterns while
-maintaining AI-driven decision making capabilities.
+Current Status: MVP with Basic Master-Plan
+-----------------------------------------
+- We have introduced a lightweight "AI Master-Plan" concept: a short list of steps
+  that the agent tries to follow in order (e.g. "Open job page → Fill search → Apply → …")
+- Each step uses confidence-based navigation logic from `ConfidenceScorer` or falls
+  back to site-specific selectors if confidence is too low.
+- Primary focus is on implementing robust DOM interaction patterns while
+  maintaining AI-driven decision making capabilities.
 
-TODO (Navigation Logic):
-- Implement confidence-based navigation logic
+TODO:
+-----
+Navigation Logic:
+- Expand the Master-Plan to handle more advanced scenario branching
 - Integrate with learning_pipeline.py for outcome tracking
-- Add GPT-based decision making for complex navigation
-- Setup proper error handling and recovery
-- Add performance monitoring and metrics
+- Add GPT-based decision making for highly dynamic pages
+- Add robust error handling for multi-step flows
+- Performance monitoring and metrics
 
-TODO (DOM Integration):
+DOM Integration:
 - Migrate all direct DOM operations to DomService
 - Implement confidence-based element selection
 - Add telemetry for DOM operation success rates
@@ -44,9 +54,10 @@ TODO (DOM Integration):
 
 Dependencies:
 ------------
-- DomService: Handles all direct DOM interactions
-- LinkedInLocators: Provides centralized selector definitions
+- DomService: For all direct DOM interactions
+- LinkedInLocators: Provides standardized selectors
 - TelemetryManager: Tracks navigation performance and outcomes
+- ConfidenceScorer / learning_pipeline: For confidence-based decisions
 
 Usage:
 ------
@@ -58,6 +69,16 @@ remain in this module.
 Example:
     navigator = AINavigator(page, min_confidence=0.8)
     success, confidence = await navigator.navigate(action, context)
+
+Master-Plan Example:
+    navigator = AINavigator(page)
+    master_plan = ["check_login", "search_jobs", "click_apply_button"]
+    success, confidence = await navigator.execute_master_plan(master_plan)
+    
+    if success:
+        print("All plan steps completed successfully with confidence:", confidence)
+    else:
+        print("Master-Plan encountered an error or low confidence step.")
 """
 
 from utils.telemetry import TelemetryManager

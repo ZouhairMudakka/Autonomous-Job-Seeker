@@ -28,6 +28,63 @@ Dependencies:
 - LinkedInLocators: Provides centralized selector definitions
 - asyncio: For asynchronous operations
 - requests: For 2captcha API calls (remains synchronous)
+
+CAPTCHA Handling Strategy:
+------------------------
+Current Implementation:
+1. Image-based CAPTCHA via 2captcha
+2. Manual fallback with screenshot
+
+Planned Enhancements (MVP):
+1. ReCAPTCHA Support
+   - Checkbox detection and interaction
+   - Site key extraction for v2/v3
+   - Token injection post-solution
+   - Puzzle detection and handling
+
+2. Alternative Services Integration
+   - AntiCaptcha support
+   - CapMonster integration
+   - hCaptcha solver capability
+
+3. Enhanced Fallback Strategy
+   - Progressive fallback chain
+   - User notification system
+   - CLI-based manual solving
+   - Session preservation
+
+4. Puzzle-Specific Handling
+   - Traffic light recognition
+   - Image grid processing
+   - Invisible reCAPTCHA support
+   - Dynamic puzzle type detection
+
+Future Considerations:
+--------------------
+1. Machine Learning Integration
+   - Local puzzle solving capability
+   - Pattern recognition for common CAPTCHAs
+   - Success rate optimization
+
+2. Rate Limiting & Recovery
+   - Smart retry mechanisms
+   - IP rotation support
+   - Session preservation
+   - Failure analysis
+
+3. Enterprise Features
+   - Custom solver integration
+   - Analytics and reporting
+   - Cost optimization
+   - Performance metrics
+
+Notes:
+------
+- CAPTCHA handling should be non-blocking when possible
+- Maintain clear separation between solver services
+- Implement proper error recovery
+- Track solver performance metrics
+- Consider cost vs. speed tradeoffs
 """
 
 import os
@@ -65,6 +122,11 @@ class CredentialsAgent:
 
         # Store DomService instance
         self.dom_service = dom_service
+
+        # Future service keys
+        self.anti_captcha_key = os.getenv("ANTI_CAPTCHA_API_KEY", "")
+        self.capmonster_key = os.getenv("CAPMONSTER_API_KEY", "")
+        self.hcaptcha_key = os.getenv("HCAPTCHA_API_KEY", "")
 
     async def random_delay(self, min_sec: float = None, max_sec: float = None):
         """Introduce a random delay to mimic human-like interaction."""
@@ -242,4 +304,83 @@ class CredentialsAgent:
             return True
         except PlaywrightTimeoutError:
             return False
+
+    async def detect_captcha_type(self, page_content: str) -> str:
+        """
+        Future method: Detect the type of CAPTCHA present on the page.
+        Returns: 'image', 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', or 'unknown'
+        """
+        # TODO: Implement CAPTCHA type detection
+        return "image"  # Default to image-based CAPTCHA for now
+
+    async def handle_recaptcha_v2(self, site_key: str, page_url: str) -> Optional[str]:
+        """
+        Future method: Handle reCAPTCHA v2 using 2captcha or alternative services.
+        """
+        if self.captcha_handler == "2captcha" and self.two_captcha_key:
+            # TODO: Implement reCAPTCHA v2 handling
+            pass
+        return None
+
+    async def handle_recaptcha_checkbox(self) -> bool:
+        """
+        Future method: Handle simple reCAPTCHA checkbox clicking.
+        Returns True if successful, False if puzzle appears.
+        """
+        if not self.dom_service:
+            return False
+        # TODO: Implement checkbox detection and clicking
+        return False
+
+    async def _handle_captcha_anti_captcha(self, captcha_type: str, **kwargs) -> Optional[str]:
+        """
+        Future method: Integration with Anti-Captcha service.
+        """
+        if not self.anti_captcha_key:
+            return None
+        # TODO: Implement Anti-Captcha integration
+        return None
+
+    async def _handle_captcha_capmonster(self, captcha_type: str, **kwargs) -> Optional[str]:
+        """
+        Future method: Integration with CapMonster service.
+        """
+        if not self.capmonster_key:
+            return None
+        # TODO: Implement CapMonster integration
+        return None
+
+    async def extract_site_key(self) -> Optional[str]:
+        """
+        Future method: Extract reCAPTCHA site key from the page.
+        """
+        if not self.dom_service:
+            return None
+        # TODO: Implement site key extraction
+        return None
+
+    async def inject_captcha_token(self, token: str) -> bool:
+        """
+        Future method: Inject solved CAPTCHA token into the page.
+        """
+        if not self.dom_service:
+            return False
+        # TODO: Implement token injection
+        return False
+
+    async def handle_puzzle_captcha(self) -> Optional[str]:
+        """
+        Future method: Handle advanced puzzle-based CAPTCHAs.
+        """
+        # TODO: Implement puzzle CAPTCHA handling
+        return await self._handle_captcha_manual("puzzle_selector")
+
+    async def verify_captcha_success(self) -> bool:
+        """
+        Future method: Verify if CAPTCHA was successfully solved.
+        """
+        if not self.dom_service:
+            return False
+        # TODO: Implement success verification
+        return False
 
