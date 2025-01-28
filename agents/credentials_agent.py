@@ -136,28 +136,153 @@ class CredentialsAgent:
         await asyncio.sleep(delay)
 
     async def handle_captcha(self, captcha_selector: str) -> Optional[str]:
-        """Main captcha handling logic."""
+        """
+        Main captcha handling logic with AI Navigator coordination.
+        
+        Steps:
+        1. Detect CAPTCHA presence
+        2. Determine CAPTCHA type
+        3. Try automated solution
+        4. Fallback to manual if needed
+        5. Verify solution
+        """
         if not self.dom_service:
             print("[CredentialsAgent] No DomService provided. Cannot handle captcha.")
             return None
 
         try:
+            # 1. Initial detection
             await self.dom_service.wait_for_selector(captcha_selector, timeout=self.default_timeout)
             await asyncio.sleep(TimingConstants.ACTION_DELAY)
-        except PlaywrightTimeoutError:
-            print("[CredentialsAgent] No CAPTCHA detected.")
-            return None
+            
+            # 2. Check if it's a rate-limit related CAPTCHA
+            rate_limited = await self.dom_service.check_element_present(
+                '.rate-limit-message, .too-many-requests',
+                timeout=1000
+            )
+            if rate_limited:
+                print("[CredentialsAgent] Rate limiting detected with CAPTCHA")
+                await asyncio.sleep(TimingConstants.RATE_LIMIT_DELAY)
 
-        print("[CredentialsAgent] CAPTCHA detected.")
-        await asyncio.sleep(TimingConstants.MODAL_TRANSITION_DELAY)
+            # 3. Determine CAPTCHA type
+            captcha_type = await self._detect_captcha_type()
+            print(f"[CredentialsAgent] Detected CAPTCHA type: {captcha_type}")
 
-        if self.captcha_handler == "2captcha" and self.two_captcha_key:
-            solution = await self._handle_captcha_2captcha(captcha_selector)
+            # 4. Try automated solution based on type
+            solution = None
+            if captcha_type == "recaptcha_v2":
+                site_key = await self.extract_site_key()
+                if site_key:
+                    solution = await self.handle_recaptcha_v2(site_key, await self.dom_service.page.url)
+            elif captcha_type == "image":
+                if self.captcha_handler == "2captcha" and self.two_captcha_key:
+                    solution = await self._handle_captcha_2captcha(captcha_selector)
+
+            # 5. If automated solution failed, try manual
+            if not solution:
+                solution = await self._handle_captcha_manual(captcha_selector)
+
+            # 6. Verify solution success
             if solution:
                 await asyncio.sleep(TimingConstants.ACTION_DELAY)
-                return solution
+                success = await self.verify_captcha_success()
+                if not success:
+                    print("[CredentialsAgent] CAPTCHA solution verification failed")
+                    return None
 
-        return await self._handle_captcha_manual(captcha_selector)
+            return solution
+
+        except Exception as e:
+            print(f"[CredentialsAgent] CAPTCHA handling error: {str(e)}")
+            return None
+
+    async def _detect_captcha_type(self) -> str:
+        """
+        Detect the type of CAPTCHA present on the page.
+        
+        Returns:
+            str: 'image', 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', or 'unknown'
+        """
+        try:
+            # Check for reCAPTCHA v2
+            recaptcha_v2 = await self.dom_service.check_element_present(
+                '.g-recaptcha, iframe[title*="reCAPTCHA"]',
+                timeout=1000
+            )
+            if recaptcha_v2:
+                return "recaptcha_v2"
+
+            # Check for reCAPTCHA v3
+            recaptcha_v3 = await self.dom_service.evaluate_script(
+                'document.querySelector("script[src*=\'recaptcha/releases/v3\']") !== null'
+            )
+            if recaptcha_v3:
+                return "recaptcha_v3"
+
+            # Check for hCaptcha
+            hcaptcha = await self.dom_service.check_element_present(
+                '.h-captcha, iframe[src*="hcaptcha.com"]',
+                timeout=1000
+            )
+            if hcaptcha:
+                return "hcaptcha"
+
+            # Check for image CAPTCHA
+            image_captcha = await self.dom_service.check_element_present(
+                'img[alt*="CAPTCHA"], img.captcha__image',
+                timeout=1000
+            )
+            if image_captcha:
+                return "image"
+
+            return "unknown"
+
+        except Exception as e:
+            print(f"[CredentialsAgent] Error detecting CAPTCHA type: {str(e)}")
+            return "unknown"
+
+    async def verify_captcha_success(self) -> bool:
+        """
+        Verify if CAPTCHA was successfully solved.
+        
+        Checks:
+        1. Error messages
+        2. Success indicators
+        3. Page progression
+        """
+        if not self.dom_service:
+            return False
+
+        try:
+            # 1. Check for error messages
+            error_present = await self.dom_service.check_element_present(
+                '.captcha-error, .error-message, .alert-error',
+                timeout=1000
+            )
+            if error_present:
+                return False
+
+            # 2. Check for success indicators
+            success_present = await self.dom_service.check_element_present(
+                '.captcha-success, .success-message',
+                timeout=1000
+            )
+            if success_present:
+                return True
+
+            # 3. Check if CAPTCHA elements are gone (indicating success)
+            captcha_gone = not await self.dom_service.check_element_present(
+                'img.captcha__image, .g-recaptcha, .h-captcha',
+                timeout=1000
+            )
+            if captcha_gone:
+                return True
+
+            return False
+
+        except Exception as e:
+            print(f"[CredentialsAgent] Error verifying CAPTCHA success: {str(e)}")
+            return False
 
     async def _handle_captcha_2captcha(self, captcha_selector: str) -> Optional[str]:
         """Use 2captcha service to solve the captcha."""
@@ -305,14 +430,6 @@ class CredentialsAgent:
         except PlaywrightTimeoutError:
             return False
 
-    async def detect_captcha_type(self, page_content: str) -> str:
-        """
-        Future method: Detect the type of CAPTCHA present on the page.
-        Returns: 'image', 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', or 'unknown'
-        """
-        # TODO: Implement CAPTCHA type detection
-        return "image"  # Default to image-based CAPTCHA for now
-
     async def handle_recaptcha_v2(self, site_key: str, page_url: str) -> Optional[str]:
         """
         Future method: Handle reCAPTCHA v2 using 2captcha or alternative services.
@@ -374,13 +491,4 @@ class CredentialsAgent:
         """
         # TODO: Implement puzzle CAPTCHA handling
         return await self._handle_captcha_manual("puzzle_selector")
-
-    async def verify_captcha_success(self) -> bool:
-        """
-        Future method: Verify if CAPTCHA was successfully solved.
-        """
-        if not self.dom_service:
-            return False
-        # TODO: Implement success verification
-        return False
 
