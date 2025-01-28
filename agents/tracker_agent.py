@@ -18,11 +18,14 @@ TODO (AI Integration):
 
 import pandas as pd
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import uuid
 import os
 from constants import TimingConstants, Messages
+import json
+import aiofiles
+from utils.telemetry import TelemetryManager
 
 class TrackerAgent:
     def __init__(self, settings: dict):
@@ -57,6 +60,16 @@ class TrackerAgent:
 
         # Set default timeout for operations
         self.default_timeout = TimingConstants.DEFAULT_TIMEOUT
+
+        self.activity_history = []  # Store recent activities
+        self.storage_path = Path(settings.get('tracker_path', './data/tracker'))
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+
+        # Initialize telemetry manager
+        self.telemetry = TelemetryManager(settings)
+        self.current_state = {}
+        self.state_history = []
+        self.metrics = {}
 
     async def log_activity(
         self,
@@ -111,6 +124,9 @@ class TrackerAgent:
                 print(f"[TrackerAgent] Error writing to CSV: {e}")
                 await asyncio.sleep(TimingConstants.ERROR_DELAY)
 
+        self.activity_history.append(activity)
+        await self._save_activities()
+
     async def get_activities(self, activity_type: str = None) -> pd.DataFrame:
         """
         Retrieve logged activities from the CSV as a pandas DataFrame.
@@ -163,3 +179,146 @@ class TrackerAgent:
             except Exception as e:
                 print(f"[TrackerAgent] Error rotating log file: {e}")
                 await asyncio.sleep(TimingConstants.ERROR_DELAY)
+
+    async def get_recent_activities(
+        self,
+        timeframe_minutes: int = 30,
+        activity_type: str | list[str] = None,
+        status: str = None
+    ) -> list[dict]:
+        """Get recent activities within timeframe."""
+        await self._load_activities()  # Load from disk before querying
+        cutoff_time = datetime.now() - timedelta(minutes=timeframe_minutes)
+        
+        # Handle activity_type as string or list
+        activity_types = (
+            [activity_type] if isinstance(activity_type, str)
+            else activity_type
+        )
+        
+        return [
+            activity for activity in self.activity_history
+            if (
+                activity['timestamp'] >= cutoff_time and
+                (not activity_types or activity['type'] in activity_types) and
+                (not status or activity['status'] == status)
+            )
+        ]
+
+    async def _load_activities(self):
+        """Load activities from disk."""
+        activities_file = self.storage_path / 'activity_history.json'
+        if activities_file.exists():
+            async with aiofiles.open(activities_file, 'r') as f:
+                content = await f.read()
+                self.activity_history = json.loads(content)
+                
+    async def _save_activities(self):
+        """Save activities to disk."""
+        activities_file = self.storage_path / 'activity_history.json'
+        async with aiofiles.open(activities_file, 'w') as f:
+            await f.write(json.dumps(self.activity_history))
+
+    async def track_action(self, action_name: str, context: dict = None) -> None:
+        """
+        Track an action with its context and update metrics.
+        """
+        timestamp = datetime.now().isoformat()
+        
+        action_data = {
+            "action": action_name,
+            "timestamp": timestamp,
+            "context": context or {},
+            "state": self.current_state.copy()
+        }
+        
+        # Update state history
+        self.state_history.append(action_data)
+        
+        # Update metrics
+        self._update_metrics(action_name, context)
+        
+        # Send telemetry
+        success = context.get("success", True) if context else True
+        confidence = context.get("confidence", None) if context else None
+        
+        await self.telemetry.track_event(
+            event_type=action_name,
+            data={
+                "timestamp": timestamp,
+                "context": context,
+                "metrics": self.metrics
+            },
+            success=success,
+            confidence=confidence
+        )
+    
+    def _update_metrics(self, action_name: str, context: dict = None) -> None:
+        """Update metrics based on the action and context."""
+        if action_name not in self.metrics:
+            self.metrics[action_name] = {
+                "count": 0,
+                "success_count": 0,
+                "failure_count": 0,
+                "last_occurrence": None,
+                "avg_duration": 0
+            }
+        
+        metric = self.metrics[action_name]
+        metric["count"] += 1
+        metric["last_occurrence"] = datetime.now().isoformat()
+        
+        if context and "success" in context:
+            if context["success"]:
+                metric["success_count"] += 1
+            else:
+                metric["failure_count"] += 1
+        
+        if context and "duration" in context:
+            # Update running average
+            prev_avg = metric["avg_duration"]
+            metric["avg_duration"] = (prev_avg * (metric["count"] - 1) + context["duration"]) / metric["count"]
+    
+    async def update_state(self, state_updates: dict) -> None:
+        """
+        Update the current state with new values.
+        """
+        self.current_state.update(state_updates)
+        
+        # Track state change
+        await self.track_action("state_updated", {
+            "updates": state_updates
+        })
+    
+    def get_state_snapshot(self) -> dict:
+        """
+        Get a snapshot of the current state and metrics.
+        """
+        return {
+            "current_state": self.current_state.copy(),
+            "metrics": self.metrics.copy(),
+            "history_length": len(self.state_history)
+        }
+    
+    async def analyze_performance(self, time_window: int = None) -> dict:
+        """
+        Analyze performance metrics within the given time window (in seconds).
+        """
+        now = datetime.now()
+        metrics = {}
+        
+        for action, data in self.metrics.items():
+            if time_window:
+                # Filter metrics within time window
+                last_occurrence = datetime.fromisoformat(data["last_occurrence"])
+                if (now - last_occurrence).total_seconds() > time_window:
+                    continue
+            
+            success_rate = data["success_count"] / data["count"] if data["count"] > 0 else 0
+            metrics[action] = {
+                "success_rate": success_rate,
+                "total_count": data["count"],
+                "avg_duration": data["avg_duration"]
+            }
+        
+        return metrics
