@@ -7,9 +7,10 @@ from utils.telemetry import TelemetryManager
 from .dom_models import DOMElementNode
 
 class DomService:
-    def __init__(self, page: Page, telemetry: TelemetryManager = None):
+    def __init__(self, page: Page, telemetry: TelemetryManager = None, settings: dict = None):
+        """Initialize DOM service with page and optional telemetry."""
         self.page = page
-        self.telemetry = telemetry or TelemetryManager()
+        self.telemetry = telemetry or TelemetryManager(settings or {"telemetry": {"enabled": True}})
 
         self.js_path = os.path.join(
             os.path.dirname(__file__), 

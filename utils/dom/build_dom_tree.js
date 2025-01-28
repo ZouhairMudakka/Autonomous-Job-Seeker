@@ -18,185 +18,308 @@ function clearHighlightContainer() {
 
 // Basic check for clickable
 function isClickableElement(el) {
-    const tag = el.tagName.toLowerCase();
-    if (["a", "button"].includes(tag)) return true;
-    if (el.getAttribute("role") === "button") return true;
-    if (el.hasAttribute("onclick")) return true;
-    // Expand logic as needed
-    return false;
-  }
-  
-  // Basic check for visible
-  function isVisibleElement(el) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return false;
-  
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || parseFloat(style.opacity) === 0) {
-      return false;
-    }
-    return true;
-  }
-  
-  // Check if element is at least partially in the viewport
-  function isInViewport(el) {
-    const rect = el.getBoundingClientRect();
-  
-    // Consider partial overlap with viewport
-    const vpWidth = window.innerWidth;
-    const vpHeight = window.innerHeight;
-  
-    const inHorizView = (rect.left < vpWidth) && ((rect.left + rect.width) > 0);
-    const inVertView = (rect.top < vpHeight) && ((rect.top + rect.height) > 0);
-  
-    return inHorizView && inVertView;
-  }
-  
-  function highlightElement(el, highlightIndex) {
-    let container = document.getElementById("dom-highlight-container");
-    if (!container) {
-      container = document.createElement("div");
-      container.id = "dom-highlight-container";
-      container.style.position = "absolute";
-      container.style.top = "0";
-      container.style.left = "0";
-      container.style.width = "100%";
-      container.style.height = "100%";
-      container.style.pointerEvents = "none";
-      container.style.zIndex = "2147483647";
-      document.body.appendChild(container);
-    }
-  
-    const colors = [
-      "#FF0000","#00FF00","#0000FF","#FFA500","#800080",
-      "#008080","#FF69B4","#4B0082","#FF4500","#2E8B57",
-      "#DC143C","#4682B4","#FF1493","#8B0000","#B8860B",
-      "#9ACD32","#FF8C00","#1E90FF","#FF00FF","#ADFF2F",
-      "#CD5C5C","#20B2AA","#FF6347","#9932CC","#FFB6C1"
-    ];
-    const baseColor = colors[highlightIndex % colors.length] || "#FF0000";
-    const backgroundColor = baseColor + "33"; // ~20% alpha
-  
-    const rect = el.getBoundingClientRect();
-    const overlay = document.createElement("div");
-    overlay.style.position = "absolute";
-    overlay.style.border = `2px solid ${baseColor}`;
-    overlay.style.backgroundColor = backgroundColor;
-    overlay.style.pointerEvents = "none";
-  
-    overlay.style.left = (rect.left + window.scrollX) + "px";
-    overlay.style.top = (rect.top + window.scrollY) + "px";
-    overlay.style.width = rect.width + "px";
-    overlay.style.height = rect.height + "px";
-  
-    // Create label
-    const label = document.createElement("div");
-    label.textContent = highlightIndex;
-    label.style.position = "absolute";
-    label.style.background = baseColor;
-    label.style.color = "#fff";
-    label.style.fontSize = "12px";
-    label.style.padding = "2px 4px";
-    label.style.pointerEvents = "none";
-  
-    label.style.left = (rect.left + window.scrollX) + "px";
-    label.style.top = (rect.top + window.scrollY) + "px";
-    label.style.zIndex = "2147483647";
-  
-    container.appendChild(overlay);
-    container.appendChild(label);
-  }
-  
-  /**
-   * Build the DOM tree while optionally highlighting up to `maxHighlights` clickable elements,
-   * prioritizing those in the visible viewport first.
-   */
-  function buildDomTree(root, doHighlight, maxHighlight) {
-    // Clear existing highlights
-    clearHighlightContainer();
-  
-    let clickableElements = [];
-  
-    function traverse(node) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent.trim();
-        if (!text) return null;
-        return {
-          type: "text",
-          content: text
-        };
-      }
-  
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const tag = node.tagName.toLowerCase();
-        const visible = isVisibleElement(node);
-        const clickable = isClickableElement(node);
-        const inViewport = visible && isInViewport(node);
-  
-        const elementData = {
-          type: "element",
-          tag: tag,
-          attributes: {},
-          children: [],
-          isClickable: clickable,
-          isVisible: visible,
-          isInViewport: inViewport // Additional property for sorting
-        };
-  
-        // Add attributes
-        for (const attr of node.attributes) {
-          elementData.attributes[attr.name] = attr.value;
+    try {
+        const tag = el.tagName.toLowerCase();
+        
+        // Common clickable elements
+        if (["a", "button", "input", "select", "textarea"].includes(tag)) return true;
+        
+        // Elements with click-related attributes
+        if (el.hasAttribute("onclick") || 
+            el.hasAttribute("ng-click") || 
+            el.hasAttribute("@click") ||
+            el.hasAttribute("v-on:click")) return true;
+            
+        // Elements with interactive roles
+        const interactiveRoles = [
+            "button", "link", "menuitem", "tab", "menuitemcheckbox",
+            "menuitemradio", "radio", "switch", "option"
+        ];
+        const role = el.getAttribute("role");
+        if (role && interactiveRoles.includes(role)) return true;
+        
+        // Check for event listeners (if possible)
+        const style = window.getComputedStyle(el);
+        if (style.cursor === "pointer") return true;
+        
+        // Check for specific classes that might indicate clickability
+        const classNames = el.className.split(" ");
+        const clickableClasses = ["btn", "button", "clickable", "link"];
+        if (classNames.some(cls => clickableClasses.some(clickable => cls.toLowerCase().includes(clickable)))) {
+            return true;
         }
-  
-        // Recurse for children
-        for (const child of node.childNodes) {
-          const childData = traverse(child);
-          if (childData) {
-            elementData.children.push(childData);
-          }
+        
+        // Input types that are clickable
+        if (tag === "input") {
+            const inputType = el.getAttribute("type");
+            const clickableTypes = ["submit", "button", "radio", "checkbox", "reset", "file"];
+            if (clickableTypes.includes(inputType)) return true;
         }
+
+        return false;
+    } catch (error) {
+        console.error("Error in isClickableElement:", error);
+        return false;
+    }
+}
   
-        // Collect clickable elements for later highlight
-        if (clickable && visible) {
-          clickableElements.push({
-            node,
-            elementData
-          });
+// Basic check for visible
+function isVisibleElement(el) {
+    try {
+        // Get element's bounding box
+        const rect = el.getBoundingClientRect();
+        
+        // Check for zero dimensions
+        if (rect.width === 0 || rect.height === 0) return false;
+        
+        // Get computed style
+        const style = window.getComputedStyle(el);
+        
+        // Check basic visibility properties
+        if (style.display === "none" || 
+            style.visibility === "hidden" || 
+            style.visibility === "collapse" || 
+            parseFloat(style.opacity) === 0) {
+            return false;
         }
-  
-        return elementData;
-      }
-      return null;
+        
+        // Check if element is detached from DOM
+        if (!document.body.contains(el)) return false;
+        
+        // Check if any parent element makes this invisible
+        let parent = el.parentElement;
+        while (parent && parent !== document.body) {
+            const parentStyle = window.getComputedStyle(parent);
+            if (parentStyle.display === "none" || 
+                parentStyle.visibility === "hidden" || 
+                parseFloat(parentStyle.opacity) === 0) {
+                return false;
+            }
+            parent = parent.parentElement;
+        }
+        
+        // Check if element is off-screen (far outside viewport)
+        const vpWidth = window.innerWidth;
+        const vpHeight = window.innerHeight;
+        const offset = 10000; // reasonable offset for elements that might be scrolled into view
+        
+        if (rect.right < -offset || 
+            rect.bottom < -offset || 
+            rect.left > vpWidth + offset || 
+            rect.top > vpHeight + offset) {
+            return false;
+        }
+        
+        return true;
+    } catch (error) {
+        console.error("Error in isVisibleElement:", error);
+        return false;
     }
-  
-    const tree = traverse(root);
-  
-    // Now we handle highlighting if doHighlight is true
-    if (doHighlight) {
-      // Sort clickableElements:
-      // 1. in-viewport first
-      // 2. then out-of-viewport
-      clickableElements.sort((a, b) => {
-        const aInView = a.elementData.isInViewport ? 1 : 0;
-        const bInView = b.elementData.isInViewport ? 1 : 0;
-        // Descending: in-viewport (1) before out-of-viewport (0)
-        if (aInView !== bInView) return bInView - aInView;
-  
-        // If both are same in-viewport status, let's sort by top offset
-        const rectA = a.node.getBoundingClientRect();
-        const rectB = b.node.getBoundingClientRect();
-        return rectA.top - rectB.top;
-      });
-  
-      let highlightCount = 0;
-      for (const { node, elementData } of clickableElements) {
-        if (highlightCount >= maxHighlight) break;
-        highlightElement(node, highlightCount);
-        elementData.highlightIndex = highlightCount;
-        highlightCount++;
-      }
+}
+
+// Cache viewport dimensions and update on resize
+let vpWidth = window.innerWidth;
+let vpHeight = window.innerHeight;
+
+window.addEventListener('resize', () => {
+    vpWidth = window.innerWidth;
+    vpHeight = window.innerHeight;
+});
+
+function isInViewport(el) {
+    try {
+        const rect = el.getBoundingClientRect();
+        
+        // Consider partial overlap with viewport
+        // Add small margin to account for elements right at the edge
+        const margin = 2; // 2px margin
+        
+        const inHorizView = (
+            (rect.left < vpWidth + margin) && 
+            ((rect.left + rect.width) > -margin)
+        );
+        
+        const inVertView = (
+            (rect.top < vpHeight + margin) && 
+            ((rect.top + rect.height) > -margin)
+        );
+        
+        // Check if element has meaningful size
+        const hasSize = (rect.width >= 1 && rect.height >= 1);
+        
+        // Check if element is reasonably positioned
+        const isReasonablyPositioned = (
+            Math.abs(rect.left) < 10000 && 
+            Math.abs(rect.top) < 10000
+        );
+        
+        return inHorizView && inVertView && hasSize && isReasonablyPositioned;
+    } catch (error) {
+        console.error("Error in isInViewport:", error);
+        return false;
     }
-  
-    return tree;
+}
+
+// Predefined colors array - moved outside for better performance
+const HIGHLIGHT_COLORS = [
+    "#FF0000","#00FF00","#0000FF","#FFA500","#800080",
+    "#008080","#FF69B4","#4B0082","#FF4500","#2E8B57",
+    "#DC143C","#4682B4","#FF1493","#8B0000","#B8860B",
+    "#9ACD32","#FF8C00","#1E90FF","#FF00FF","#ADFF2F",
+    "#CD5C5C","#20B2AA","#FF6347","#9932CC","#FFB6C1"
+];
+
+function highlightElement(el, highlightIndex) {
+    try {
+        // Get or create container
+        let container = document.getElementById("dom-highlight-container");
+        if (!container) {
+            container = document.createElement("div");
+            container.id = "dom-highlight-container";
+            container.style.position = "absolute";
+            container.style.top = "0";
+            container.style.left = "0";
+            container.style.width = "100%";
+            container.style.height = "100%";
+            container.style.pointerEvents = "none";
+            container.style.zIndex = "2147483647";
+            document.body.appendChild(container);
+        }
+
+        // Get color and calculate background
+        const baseColor = HIGHLIGHT_COLORS[highlightIndex % HIGHLIGHT_COLORS.length] || "#FF0000";
+        const backgroundColor = baseColor + "33"; // ~20% alpha
+
+        // Cache scroll positions and element rect
+        const rect = el.getBoundingClientRect();
+        const scrollX = window.scrollX;
+        const scrollY = window.scrollY;
+
+        // Create and style overlay
+        const overlay = document.createElement("div");
+        overlay.style.position = "absolute";
+        overlay.style.border = `2px solid ${baseColor}`;
+        overlay.style.backgroundColor = backgroundColor;
+        overlay.style.pointerEvents = "none";
+        overlay.style.left = (rect.left + scrollX) + "px";
+        overlay.style.top = (rect.top + scrollY) + "px";
+        overlay.style.width = rect.width + "px";
+        overlay.style.height = rect.height + "px";
+
+        // Create and style label
+        const label = document.createElement("div");
+        label.textContent = highlightIndex;
+        label.style.position = "absolute";
+        label.style.background = baseColor;
+        label.style.color = "#fff";
+        label.style.fontSize = "12px";
+        label.style.padding = "2px 4px";
+        label.style.pointerEvents = "none";
+        label.style.left = (rect.left + scrollX) + "px";
+        label.style.top = (rect.top + scrollY) + "px";
+        label.style.zIndex = "2147483647";
+
+        // Batch DOM operations using fragment
+        const fragment = document.createDocumentFragment();
+        fragment.appendChild(overlay);
+        fragment.appendChild(label);
+        container.appendChild(fragment);
+
+    } catch (error) {
+        console.error("Error in highlightElement:", error);
+    }
+}
+
+/**
+ * Build the DOM tree while optionally highlighting up to `maxHighlights` clickable elements,
+ * prioritizing those in the visible viewport first.
+ */
+function buildDomTree(root, doHighlight, maxHighlight) {
+  // Clear existing highlights
+  clearHighlightContainer();
+
+  let clickableElements = [];
+
+  function traverse(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent.trim();
+      if (!text) return null;
+      return {
+        type: "text",
+        content: text
+      };
+    }
+
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const tag = node.tagName.toLowerCase();
+      const visible = isVisibleElement(node);
+      const clickable = isClickableElement(node);
+      const inViewport = visible && isInViewport(node);
+
+      const elementData = {
+        type: "element",
+        tag: tag,
+        attributes: {},
+        children: [],
+        isClickable: clickable,
+        isVisible: visible,
+        isInViewport: inViewport // Additional property for sorting
+      };
+
+      // Add attributes
+      for (const attr of node.attributes) {
+        elementData.attributes[attr.name] = attr.value;
+      }
+
+      // Recurse for children
+      for (const child of node.childNodes) {
+        const childData = traverse(child);
+        if (childData) {
+          elementData.children.push(childData);
+        }
+      }
+
+      // Collect clickable elements for later highlight
+      if (clickable && visible) {
+        clickableElements.push({
+          node,
+          elementData
+        });
+      }
+
+      return elementData;
+    }
+    return null;
   }
+
+  const tree = traverse(root);
+
+  // Now we handle highlighting if doHighlight is true
+  if (doHighlight) {
+    // Sort clickableElements:
+    // 1. in-viewport first
+    // 2. then out-of-viewport
+    clickableElements.sort((a, b) => {
+      const aInView = a.elementData.isInViewport ? 1 : 0;
+      const bInView = b.elementData.isInViewport ? 1 : 0;
+      // Descending: in-viewport (1) before out-of-viewport (0)
+      if (aInView !== bInView) return bInView - aInView;
+
+      // If both are same in-viewport status, let's sort by top offset
+      const rectA = a.node.getBoundingClientRect();
+      const rectB = b.node.getBoundingClientRect();
+      return rectA.top - rectB.top;
+    });
+
+    let highlightCount = 0;
+    for (const { node, elementData } of clickableElements) {
+      if (highlightCount >= maxHighlight) break;
+      highlightElement(node, highlightCount);
+      elementData.highlightIndex = highlightCount;
+      highlightCount++;
+    }
+  }
+
+  return tree;
+}
   
