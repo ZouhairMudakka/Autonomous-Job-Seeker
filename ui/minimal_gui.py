@@ -271,7 +271,7 @@ class MinimalGUI:
         # Start button with success style
         self.start_button = ttk.Button(
             control_frame,
-            text="▶ Start Automation",
+            text="🤖 Start AI Job Search",
             command=self.start_automation_command,
             style="Success.TButton"
         )
@@ -280,7 +280,7 @@ class MinimalGUI:
         # Pause button with warning style
         self.pause_button = ttk.Button(
             control_frame,
-            text="⏸ Pause",
+            text="⏸ Pause AI Agents",
             command=self.pause_automation_command,
             state=tk.DISABLED,
             style="Warning.TButton"
@@ -290,7 +290,7 @@ class MinimalGUI:
         # Stop button with danger style
         self.stop_button = ttk.Button(
             control_frame,
-            text="⏹ Stop",
+            text="⏹ Stop Job Search",
             command=self.stop_automation_command,
             state=tk.DISABLED,
             style="Danger.TButton"
@@ -1058,6 +1058,139 @@ class MinimalGUI:
             foreground="#666666"
         )
         cv_info.pack(pady=5)
+
+        # ---------- CHAT TAB ----------
+        self.chat_tab = ttk.Frame(self.notebook, padding="20")
+        self.chat_tab.configure(style="Custom.TFrame")
+        self.notebook.add(self.chat_tab, text="💬 Chat")
+
+        # Create main chat container with weight configuration
+        chat_container = ttk.Frame(self.chat_tab)
+        chat_container.pack(fill=tk.BOTH, expand=True)
+        chat_container.grid_columnconfigure(0, weight=1)
+        chat_container.grid_rowconfigure(1, weight=1)
+
+        # Header frame with AI model info
+        header_frame = ttk.Frame(chat_container)
+        header_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+        header_frame.grid_columnconfigure(1, weight=1)
+
+        # AI Assistant icon and title
+        ttk.Label(
+            header_frame,
+            text="🤖",
+            font=("Arial", 16)
+        ).grid(row=0, column=0, padx=(0, 5))
+
+        ttk.Label(
+            header_frame,
+            text="AI Assistant",
+            style="Title.TLabel"
+        ).grid(row=0, column=1, sticky="w")
+
+        # AI Model info
+        self.model_info_var = tk.StringVar(value="Model: Loading...")
+        ttk.Label(
+            header_frame,
+            textvariable=self.model_info_var,
+            style="Subtitle.TLabel"
+        ).grid(row=1, column=1, sticky="w")
+
+        # Chat history frame with dynamic resizing
+        chat_history_frame = ttk.Frame(chat_container)
+        chat_history_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        chat_history_frame.grid_columnconfigure(0, weight=1)
+        chat_history_frame.grid_rowconfigure(0, weight=1)
+
+        # Chat history text widget with improved styling
+        self.chat_history = tk.Text(
+            chat_history_frame,
+            wrap=tk.WORD,
+            font=("Segoe UI", 10),
+            bg="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=10,
+            spacing3=5,  # Add spacing between messages
+            cursor="arrow"
+        )
+        self.chat_history.grid(row=0, column=0, sticky="nsew")
+
+        # Scrollbar with modern styling
+        chat_scrollbar = ttk.Scrollbar(
+            chat_history_frame,
+            orient=tk.VERTICAL,
+            command=self.chat_history.yview
+        )
+        chat_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.chat_history.config(yscrollcommand=chat_scrollbar.set)
+
+        # Input frame with modern design
+        input_frame = ttk.Frame(chat_container)
+        input_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
+        input_frame.grid_columnconfigure(0, weight=1)
+
+        # Modern input field
+        self.chat_input = ttk.Entry(
+            input_frame,
+            font=("Segoe UI", 10),
+            style="Chat.TEntry"
+        )
+        self.chat_input.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self.chat_input.bind("<Return>", self.send_message)
+
+        # Send button with icon
+        send_button = ttk.Button(
+            input_frame,
+            text="Send ➤",
+            command=lambda: self.send_message(None),
+            style="Chat.TButton"
+        )
+        send_button.grid(row=0, column=1)
+
+        # Configure chat message tags with modern styling
+        self.chat_history.tag_configure(
+            "user",
+            foreground="#0078D4",
+            font=("Segoe UI", 10, "bold"),
+            spacing1=10,
+            spacing3=5
+        )
+        self.chat_history.tag_configure(
+            "assistant",
+            foreground="#444444",
+            font=("Segoe UI", 10),
+            spacing1=5,
+            spacing3=10,
+            lmargin1=20
+        )
+        self.chat_history.tag_configure(
+            "timestamp",
+            foreground="#666666",
+            font=("Segoe UI", 8),
+            spacing1=2
+        )
+        self.chat_history.tag_configure(
+            "error",
+            foreground="#dc3545",
+            font=("Segoe UI", 10, "italic")
+        )
+        self.chat_history.config(state=tk.DISABLED)
+
+        # Add chat-specific styles
+        style.configure(
+            "Chat.TEntry",
+            padding=10,
+            relief=tk.FLAT,
+            borderwidth=1
+        )
+        style.configure(
+            "Chat.TButton",
+            padding=10,
+            font=("Segoe UI", 10),
+            background="#0078D4",
+            foreground="white"
+        )
 
     async def start_automation(self):
         """Start the automation process."""
@@ -2169,6 +2302,75 @@ class MinimalGUI:
         except Exception as e:
             self.log_error(f"Error during component test: {str(e)}")
             return {"error": str(e)}
+
+    def send_message(self, event=None):
+        """Handle sending a chat message."""
+        try:
+            message = self.chat_input.get().strip()
+            if not message:
+                return
+
+            # Clear input
+            self.chat_input.delete(0, tk.END)
+
+            # Add message to chat history
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            
+            self.chat_history.config(state=tk.NORMAL)
+            self.chat_history.insert(tk.END, f"[{timestamp}] ", "timestamp")
+            self.chat_history.insert(tk.END, "You: ", "user")
+            self.chat_history.insert(tk.END, f"{message}\n", "user")
+            self.chat_history.see(tk.END)
+            self.chat_history.config(state=tk.DISABLED)
+
+            # Process message asynchronously
+            self.run_coroutine_in_background(self.process_message(message))
+
+        except Exception as e:
+            self.log_error(f"Error sending message: {str(e)}")
+
+    async def process_message(self, message: str):
+        """Process a chat message and generate a response."""
+        try:
+            # Add loading indicator
+            self.chat_history.config(state=tk.NORMAL)
+            self.chat_history.insert(tk.END, "AI Assistant is thinking...\n", "assistant")
+            self.chat_history.see(tk.END)
+            self.chat_history.config(state=tk.DISABLED)
+
+            # Get response from AI module through controller
+            response = await self.controller.process_chat_message(message)
+
+            # Update model info if available
+            if hasattr(self.controller, 'ai_module'):
+                model_info = self.controller.ai_module.get_model_info()
+                self.model_info_var.set(f"Model: {model_info}")
+
+            # Remove loading indicator and add response
+            self.chat_history.config(state=tk.NORMAL)
+            self.chat_history.delete("end-2c linestart", tk.END)  # Remove loading message
+            
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.chat_history.insert(tk.END, f"[{timestamp}] ", "timestamp")
+            self.chat_history.insert(tk.END, "🤖 AI: ", "assistant")
+            self.chat_history.insert(tk.END, f"{response}\n", "assistant")
+            self.chat_history.see(tk.END)
+            self.chat_history.config(state=tk.DISABLED)
+
+            # Track chat interaction
+            await self._track_telemetry("chat_interaction", {
+                "message_length": len(message),
+                "response_length": len(response),
+                "model": getattr(self.controller.ai_module, 'model_name', 'unknown')
+            })
+
+        except Exception as e:
+            self.log_error(f"Error processing message: {str(e)}")
+            self.chat_history.config(state=tk.NORMAL)
+            self.chat_history.delete("end-2c linestart", tk.END)
+            self.chat_history.insert(tk.END, "❌ Error: Failed to process message\n", "error")
+            self.chat_history.see(tk.END)
+            self.chat_history.config(state=tk.DISABLED)
 
 # Additional comment about possibly splitting the code into a ui/components/ folder
 # if the GUI grows with multiple custom widgets or advanced config tabs.
