@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.3](https://github.com/ZouhairMudakka/Autonomous-Job-Seeker/compare/v2.1.2...v2.1.3) (2025-01-29)
+
+
+### Bug Fixes
+
+* remove extra text from CHANGELOG.md ([c11324a](https://github.com/ZouhairMudakka/Autonomous-Job-Seeker/commit/c11324a3583777d6b91c70ab263bedb3cadfb7ea))
+
 ## [2.1.2](https://github.com/ZouhairMudakka/Autonomous-Job-Seeker/compare/v2.1.1...v2.1.2) (2025-01-29)
 
 
