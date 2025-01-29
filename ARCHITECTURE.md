@@ -96,7 +96,7 @@ sequenceDiagram
     B-->>Main: Browser & Page Ready
 
     Main->>Mode: Display Mode Selection
-    note over Mode: 1) Automatic Mode\n2) Full Control Mode\n3) GUI Mode\n4) Exit
+    note over Mode: 1) Automatic Mode<br/>2) Full Control Mode<br/>3) GUI Mode<br/>4) Exit
 
     alt Automatic Mode
         Mode->>Auto: run_automatic_mode()
@@ -105,13 +105,13 @@ sequenceDiagram
         Auto-->>Mode: Return to Mode Selection
     else Full Control Mode
         Mode->>CLI: run_full_control_mode()
-        note over CLI: Interactive CLI session\nUser types commands
+        note over CLI: Interactive CLI session<br/>User types commands
         CLI->>C: Various Controller Commands
         C-->>CLI: Command Results
         CLI-->>Mode: Return to Mode Selection
     else GUI Mode
         Mode->>GUI: run_gui_mode()
-        note over GUI: MinimalGUI window\nStart/Resume/Pause/Stop
+        note over GUI: MinimalGUI window<br/>Start/Resume/Pause/Stop
         GUI->>C: Controller Actions
         C-->>GUI: Action Results
         GUI-->>Mode: Return to Mode Selection
