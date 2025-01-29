@@ -5,7 +5,7 @@
 ```mermaid
 flowchart LR
 
-    %% Top-level
+    %% Top-level - Updated for sync test
     Controller(( Controller ))
     TaskManager(( TaskManager ))
 
