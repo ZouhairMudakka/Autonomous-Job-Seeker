@@ -5,7 +5,8 @@
 ```mermaid
 flowchart LR
 
-    %% Top-level - Updated for sync test
+    %% Top-level - Testing sync workflow
+    %% Added this comment to trigger sync
     Controller(( Controller ))
     TaskManager(( TaskManager ))
 
