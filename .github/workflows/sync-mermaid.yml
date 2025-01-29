@@ -1,29 +1,41 @@
 name: Sync Mermaid Diagrams
+
 on:
   push:
     paths:
       - 'ARCHITECTURE.md'
     branches:
       - main
+
 jobs:
   sync-mermaid:
     runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      
     steps:
       - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
           python-version: '3.x'
+          
       - name: Install dependencies
         run: |
           pip install pyyaml
+          
       - name: Sync Mermaid diagrams
         run: |
           python .github/scripts/sync_mermaid.py
+          
       - name: Commit changes
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git add README.md
           git diff --quiet && git diff --staged --quiet || git commit -m "docs: sync mermaid diagrams from ARCHITECTURE.md"
           git push
