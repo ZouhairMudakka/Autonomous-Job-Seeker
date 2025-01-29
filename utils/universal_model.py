@@ -36,6 +36,7 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 import openai
+from datetime import datetime
 
 
 class ModelSelector:
@@ -123,6 +124,15 @@ class ModelSelector:
 
         # Optionally store custom token limits at runtime
         self.custom_token_limits = {}
+
+        # GUI Chat Integration settings
+        self.chat_system_prompt = """You are a helpful AI assistant integrated into a job search automation system. 
+You can help users with their job search, provide advice, and answer questions about the automation process.
+You have access to various features including CV parsing, job matching, and application automation.
+You can explain how these features work and help users make the most of them."""
+
+        self.chat_max_history = 50  # Maximum number of messages to keep in history
+        self.chat_max_context = 10  # Maximum number of messages to include in context window
 
     def _validate_env_vars(self):
         if not self.openai_api_key:
@@ -343,3 +353,236 @@ class ModelSelector:
                     client.close()
                 except Exception as e:
                     self.logger.warning(f"Error closing client: {str(e)}")
+
+    def format_chat_messages(self, messages: List[Dict[str, Any]], include_system_prompt: bool = True) -> List[Dict[str, str]]:
+        """
+        Format chat messages for the model, optionally including the system prompt.
+        Specifically designed for GUI chat integration.
+        """
+        formatted_messages = []
+        
+        if include_system_prompt:
+            formatted_messages.append({
+                "role": "system",
+                "content": self.chat_system_prompt
+            })
+            
+        # Add the most recent messages within context window
+        formatted_messages.extend(messages[-self.chat_max_context:])
+        
+        return formatted_messages
+
+    def get_chat_response(self,
+                         messages: List[Dict[str, Any]],
+                         model: str = None,
+                         temperature: float = 0.7,
+                         max_tokens: int = None,
+                         **kwargs) -> Dict[str, Any]:
+        """
+        Get a response for the GUI chat interface.
+        Returns a dictionary with the response and metadata.
+        """
+        try:
+            # Use default model if none specified
+            if model is None:
+                model = self.DEFAULT_TEXT_MODEL
+
+            # Format messages with system prompt
+            formatted_messages = self.format_chat_messages(messages)
+            
+            # Get token limits for the model
+            token_limits = self.get_token_limits(model)
+            if max_tokens is None:
+                max_tokens = token_limits["output"]
+
+            # Get response from model
+            response = self.chat_completion(
+                messages=formatted_messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                return_full_response=True,
+                **kwargs
+            )
+
+            # Extract and format the result
+            result = {
+                "content": response.choices[0].message.content,
+                "model": model,
+                "timestamp": datetime.now().isoformat(),
+                "metadata": {
+                    "token_count": response.usage.total_tokens if hasattr(response, 'usage') else None,
+                    "model_name": model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                }
+            }
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Error in get_chat_response: {str(e)}")
+            return {
+                "content": f"Error: {str(e)}",
+                "model": model,
+                "timestamp": datetime.now().isoformat(),
+                "metadata": {
+                    "error": str(e),
+                    "model_name": model
+                }
+            }
+
+    def update_chat_system_prompt(self, new_prompt: str):
+        """Update the system prompt used in chat conversations."""
+        self.chat_system_prompt = new_prompt
+
+    def set_chat_context_window(self, max_history: int = None, max_context: int = None):
+        """Update the chat context window settings."""
+        if max_history is not None:
+            self.chat_max_history = max_history
+        if max_context is not None:
+            self.chat_max_context = max_context
+
+    async def stream_chat_response(self,
+                                 messages: List[Dict[str, Any]],
+                                 model: str = None,
+                                 temperature: float = 0.7,
+                                 max_tokens: int = None,
+                                 chunk_callback=None,
+                                 **kwargs) -> Dict[str, Any]:
+        """
+        Stream a response for the GUI chat interface.
+        Calls chunk_callback with each chunk of the response as it arrives.
+        Returns the complete response with metadata when done.
+        """
+        try:
+            # Use default model if none specified
+            if model is None:
+                model = self.DEFAULT_TEXT_MODEL
+
+            # Format messages with system prompt
+            formatted_messages = self.format_chat_messages(messages)
+            
+            # Get token limits for the model
+            token_limits = self.get_token_limits(model)
+            if max_tokens is None:
+                max_tokens = token_limits["output"]
+
+            # Start streaming response
+            full_content = ""
+            start_time = datetime.now()
+            
+            # Set up streaming parameters
+            kwargs['stream'] = True
+            response_stream = self.chat_completion(
+                messages=formatted_messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                return_full_response=True,
+                **kwargs
+            )
+
+            # Process the stream
+            async for chunk in response_stream:
+                if hasattr(chunk.choices[0], 'delta') and hasattr(chunk.choices[0].delta, 'content'):
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        full_content += content
+                        if chunk_callback:
+                            await chunk_callback(content)
+
+            # Prepare final result with metadata
+            end_time = datetime.now()
+            result = {
+                "content": full_content,
+                "model": model,
+                "timestamp": end_time.isoformat(),
+                "metadata": {
+                    "model_name": model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "response_time": (end_time - start_time).total_seconds()
+                }
+            }
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Error in stream_chat_response: {str(e)}")
+            error_result = {
+                "content": f"Error: {str(e)}",
+                "model": model,
+                "timestamp": datetime.now().isoformat(),
+                "metadata": {
+                    "error": str(e),
+                    "model_name": model
+                }
+            }
+            if chunk_callback:
+                await chunk_callback(error_result["content"])
+            return error_result
+
+    def export_chat_history(self, history: List[Dict[str, Any]], format: str = "txt") -> bytes:
+        """
+        Export chat history in various formats.
+        Supported formats: txt, json, markdown, html
+        """
+        try:
+            if format == "txt":
+                content = ""
+                for msg in history:
+                    timestamp = msg.get("timestamp", "").split("T")[1][:8]  # Extract time HH:MM:SS
+                    role = msg.get("role", "unknown")
+                    text = msg.get("content", "")
+                    content += f"[{timestamp}] {role.upper()}: {text}\n\n"
+                return content.encode('utf-8')
+
+            elif format == "json":
+                import json
+                return json.dumps(history, indent=2).encode('utf-8')
+
+            elif format == "markdown":
+                content = "# Chat History\n\n"
+                for msg in history:
+                    timestamp = msg.get("timestamp", "").split("T")[1][:8]
+                    role = msg.get("role", "unknown")
+                    text = msg.get("content", "")
+                    content += f"### {role.upper()} ({timestamp})\n\n{text}\n\n---\n\n"
+                return content.encode('utf-8')
+
+            elif format == "html":
+                content = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <style>
+                        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                        .message { margin: 10px 0; padding: 10px; border-radius: 5px; }
+                        .user { background: #e3f2fd; }
+                        .assistant { background: #f5f5f5; }
+                        .timestamp { color: #666; font-size: 0.8em; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Chat History</h1>
+                """
+                for msg in history:
+                    timestamp = msg.get("timestamp", "").split("T")[1][:8]
+                    role = msg.get("role", "unknown")
+                    text = msg.get("content", "").replace("\n", "<br>")
+                    content += f"""
+                    <div class="message {role}">
+                        <div class="timestamp">{timestamp}</div>
+                        <div class="content"><strong>{role.upper()}:</strong> {text}</div>
+                    </div>
+                    """
+                content += "</body></html>"
+                return content.encode('utf-8')
+
+            else:
+                raise ValueError(f"Unsupported export format: {format}")
+
+        except Exception as e:
+            self.logger.error(f"Error exporting chat history: {str(e)}")
+            return f"Error exporting chat history: {str(e)}".encode('utf-8')
