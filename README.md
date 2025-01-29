@@ -101,6 +101,33 @@ sequenceDiagram
 ## Features
 
 ### Currently Active
+- Advanced AI-Driven Navigation
+  - Confidence-based action execution
+  - Dynamic AI Master-Plan for multi-step flows
+  - Self-diagnostic error handling
+  - Automatic CAPTCHA detection and handling
+  - Rate limiting protection with exponential backoff
+  - Session state management and recovery
+- DOM Interaction & Management
+  - Robust element discovery and interaction
+  - DOM tree traversal and analysis
+  - Iframe handling and context switching
+  - Screenshot and visual feedback
+  - Advanced scrolling and element visibility checks
+- Modern GUI Interface
+  - Real-time activity tracking and filtering
+  - CV file management and preview
+  - Calendar-based date filtering
+  - Detailed statistics and analytics
+  - Export functionality
+  - Component health monitoring
+- System Infrastructure
+  - Async task management
+  - Telemetry collection and analysis
+  - Comprehensive error handling
+  - State persistence and recovery
+  - Performance monitoring
+  - Human-like delays and rate limiting
 - Basic LinkedIn Automation
   - Job search and filtering
   - "Easy Apply" detection
@@ -109,21 +136,26 @@ sequenceDiagram
   - PDF parsing
   - Basic field extraction
   - Cover letter generation (GPT-4)
-- System Infrastructure
-  - CSV/JSON-based storage
-  - Logging functionality
-  - Human-like delays
-  - Concurrency safety
 
 ### Pending Activation (Phase 1)
-- AI-Driven Navigation
-  - Confidence-based actions
-  - Self-diagnostic error handling
-  - Learning pipeline integration
-- Enhanced Form Filling
-  - AI-powered field detection
-  - Smart validation
-  - Automated retries
+- Enhanced AI Integration
+  - GPT-4 powered decision making
+  - Natural language instruction processing
+  - Context-aware strategy formulation
+  - Predictive problem solving
+  - Learning from past interactions
+- Advanced Form Analysis
+  - AI-powered semantic field matching
+  - Cross-platform form pattern recognition
+  - Dynamic validation rules generation
+  - Smart default value prediction
+  - Error correction suggestions
+- Intelligent Job Matching
+  - Semantic skill matching
+  - Experience level assessment
+  - Company culture fit analysis
+  - Salary range prediction
+  - Application success probability
 
 ### Future Roadmap
 - Phase 2 (Post-MVP)
@@ -181,93 +213,128 @@ For a detailed development roadmap and timeline, see [ROADMAP.md](ROADMAP.md)
 
 ## System Operation
 
-### Starting the Application
+The system offers three operation modes, each catering to different user needs:
+
+#### 1. Automatic Mode (Autopilot)
+- Fully automated job search and application
+- AI-driven decision making
+- Minimal user intervention required
+- Real-time progress updates
+- Automatic error recovery
+- Rate limiting protection
+
+#### 2. Full Control Mode (Interactive CLI)
+Available commands:
+- `start`: Begin job search workflow
+- `pause`: Temporarily pause operations
+- `resume`: Continue from last state
+- `stop`: Gracefully stop operations
+- `status`: View detailed progress
+- `export`: Export activity data
+- `config`: Update settings
+- `verify`: Run component tests
+- `quit`: Exit to mode selection
+
+#### 3. GUI Mode (Recommended)
+Features:
+- Real-time activity monitoring
+- Detailed statistics dashboard
+- CV management interface
+- Date-based filtering
+- Activity type filtering
+- Export capabilities
+- Component health monitoring
+- Status indicators
+- Progress tracking
+
+### Session Management
+- Persistent browser sessions
+- Automatic state recovery
+- Session pause/resume
+- Error state handling
+- Performance monitoring
+- Telemetry collection
+- Activity logging
+
+### Error Recovery
+The system implements a robust error recovery mechanism:
+- Automatic retry with exponential backoff
+- State persistence and restoration
+- CAPTCHA detection and handling
+- Rate limit management
+- DOM verification steps
+- Network error handling
+- Session recovery
+
+## Usage
+
+### 1. Application Launch
 ```bash
 python main.py
 ```
 
-### Interactive Menu Flow
+### 2. Browser Selection
+```
+Select Browser:
+1) Edge (recommended)
+2) Chrome
+3) Firefox
+4) Attach to existing browser (Chromium-based)*
+```
+*For attaching to existing browser:
+```bash
+# Chrome:
+google-chrome --remote-debugging-port=9222
+# Edge:
+msedge --remote-debugging-port=9222
+```
 
-1. **Browser Selection**
-   ```
-   Select Browser:
-   1) Edge (recommended)
-   2) Chrome
-   3) Firefox
-   4) Attach to existing browser (Chromium-based)*
-   ```
-   *Note: To attach to existing browser, launch it with:
-   ```bash
-   # For Chrome:
-   google-chrome --remote-debugging-port=9222
-   # For Edge:
-   msedge --remote-debugging-port=9222
-   ```
+### 3. Mode Selection
+Choose your preferred operation mode:
+- **Automatic Mode**: For hands-off operation
+- **Full Control Mode**: For command-line control
+- **GUI Mode**: For visual monitoring and control
 
-2. **Operation Mode Selection**
-   ```
-   Operation Mode:
-   1) Automatic Mode (autopilot)
-   2) Full Control Mode (interactive CLI)
-   3) GUI Mode
-   4) Exit
-   ```
+### 4. GUI Mode Features
+- **Activity Monitor**: Real-time tracking of system actions
+- **CV Management**: Upload, preview, and manage CV files
+- **Date Filtering**: Filter activities by date range
+- **Statistics**: View detailed performance metrics
+- **Export**: Save activity data and statistics
+- **Health Monitor**: Check component status
 
-### Operation Modes
+### 5. Activity Types
+The system tracks various activity types:
+- 🤔 AI Thinking
+- ✅ AI Decision
+- 🔍 AI Analysis
+- ✨ AI Generation
+- 🌐 Navigation
+- 👆 Click
+- 📝 Form Fill
+- 🔒 CAPTCHA
+- 📄 CV Parse
+- 📊 Data Analysis
+- 🎯 Job Match
+- 🔑 Authentication
+- ⚙️ System
 
-#### 1. Automatic Mode
-- Runs predefined workflow automatically
-- Handles job search and application process
-- Minimal user intervention required
-- Shows real-time progress updates
+### 6. Performance Monitoring
+- Real-time success rates
+- Response time tracking
+- Error frequency analysis
+- Rate limiting incidents
+- Resource usage stats
+- Performance scoring
 
-#### 2. Full Control Mode (CLI)
-Available commands:
-- `start`: Begin job search workflow
-- `stop`: Pause current operations
-- `status`: Check progress statistics
-- `config`: Update preferences
-- `export`: Export history/analytics
-- `quit`: Return to mode selection
-
-#### 3. GUI Mode
-- Minimal graphical interface
-- Visual progress tracking
-- Basic control buttons
-- Real-time status updates
-(Currently in development)
-
-### Error Recovery
-- System provides graceful error handling
-- Option to retry or switch modes
-- Automatic resource cleanup
-- Session persistence where possible
-
-### Session Management
-- Browser sessions can be persistent or temporary
-- Cookies and preferences are saved between runs
-- Automatic cleanup on exit
-- Support for headless operation
-
-## Usage
-1. Start the application using the CLI:
-   ```bash
-   python main.py
-   ```
-2. Use the following CLI commands:
-   - `start`: Begin job search and application workflow
-   - `stop`: Pause all operations
-   - `status`: Check current progress and statistics
-   - `config`: Update search and application preferences
-   - `export`: Export application history and analytics
-   - `quit`: Exit the application
-
-3. Browser Extension:
-   - Install the extension from the `ui/extension` directory
-   - Monitor job search progress
-   - Review application statuses
-   - Adjust search parameters
-   - View analytics and insights
+### 7. Data Export
+Export options include:
+- Activity logs
+- Performance metrics
+- Application statistics
+- CV parsing results
+- Job match data
+- System health reports
 
 ## License
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
