@@ -18,6 +18,9 @@ For a detailed view of the project's directory structure and file organization, 
 ## Architecture Diagrams
 
 <!-- MERMAID-START -->
+
+### Agent Interaction Flow
+
 ```mermaid
 flowchart LR
 
@@ -63,6 +66,9 @@ flowchart LR
     Controller -- "Manage user preferences" --> UserProfileAgent
     LinkedInAgent -- "Read user preferences" --> UserProfileAgent
 ```
+
+### Sequence Flow Example
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -89,54 +95,7 @@ sequenceDiagram
     C->>TK: log_activity "Flow success"
     note over C: Then more flows or end_session
 ```
-```mermaid
-sequenceDiagram
-    autonumber
-    participant User
-    participant Main as main.py
-    participant Mode as Mode Selector
-    participant Auto as Automatic Mode
-    participant CLI as Full Control Mode
-    participant GUI as GUI Mode
-    participant C as Controller
-    participant B as Browser Setup
 
-    User->>Main: Start Application
-    Main->>B: Initialize Browser
-    B-->>Main: Browser & Page Ready
-
-    Main->>Mode: Display Mode Selection
-    note over Mode: 1) Automatic Mode
-2) Full Control Mode
-3) GUI Mode
-4) Exit
-
-    alt Automatic Mode
-        Mode->>Auto: run_automatic_mode()
-        Auto->>C: run_linkedin_flow(job_title, location)
-        C-->>Auto: Flow Complete
-        Auto-->>Mode: Return to Mode Selection
-    else Full Control Mode
-        Mode->>CLI: run_full_control_mode()
-        note over CLI: Interactive CLI session
-User types commands
-        CLI->>C: Various Controller Commands
-        C-->>CLI: Command Results
-        CLI-->>Mode: Return to Mode Selection
-    else GUI Mode
-        Mode->>GUI: run_gui_mode()
-        note over GUI: MinimalGUI window
-Start/Resume/Pause/Stop
-        GUI->>C: Controller Actions
-        C-->>GUI: Action Results
-        GUI-->>Mode: Return to Mode Selection
-    else Exit
-        Mode->>Main: Cleanup and Exit
-    end
-
-    Main->>C: end_session()
-    Main->>B: Cleanup Browser
-```
 <!-- MERMAID-END --> 
 
 ## Features
