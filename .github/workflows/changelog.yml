@@ -34,7 +34,7 @@ jobs:
           
       - name: Install dependencies
         run: |
-          npm ci || npm install
+          npm ci
           npm install -g semantic-release @semantic-release/git @semantic-release/changelog
           
       - name: Setup Git

@@ -1,6 +1,6 @@
 {
   "name": "autonomous-job-seeker",
-  "version": "0.0.0-development",
+  "version": "0.0.0",
   "private": true,
   "scripts": {
     "semantic-release": "semantic-release"

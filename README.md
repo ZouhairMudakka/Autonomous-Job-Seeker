@@ -336,8 +336,29 @@ Export options include:
 - Job match data
 - System health reports
 
+## Authors
+
+**Lead Developer:**
+- Zouhair Mudakka ([@ZouhairMudakka](https://github.com/ZouhairMudakka))
+
 ## License
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+- Thanks to all contributors who have helped shape this project
+- Special thanks to the open-source community
+
+## Contact
+For any inquiries or support:
+- Email: [hello@mudakka.com]
+- LinkedIn: [@ZouhairMudakka](https://www.linkedin.com/in/zouhair-mudakka/)
+- GitHub: [@ZouhairMudakka](https://github.com/ZouhairMudakka)
+- Website: [@Mudakka](https://www.mudakka.com)
+
+## Project Status
+Current Version: 1.0.0 (Beta)
+Last Updated: January 2025
+---
 
 ### License Verification
 To verify the integrity of the LICENSE file:
@@ -345,7 +366,8 @@ To verify the integrity of the LICENSE file:
 2. It should contain the complete Apache License 2.0 text
 3. The copyright notice should read:
    ```
-   Copyright [2025] Mudakka Consulting FZ-LLC
+   Copyright [2025]© Mudakka Consulting FZ-LLC. All rights reserved.
+
    ```
 4. You can verify the license text matches the official Apache License 2.0 by comparing with:
    https://www.apache.org/licenses/LICENSE-2.0.txt
