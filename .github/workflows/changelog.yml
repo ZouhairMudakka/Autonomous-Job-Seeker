@@ -1,36 +1,57 @@
-name: Generate Changelog
+name: Generate Changelog and Version
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:  # Allow manual trigger
+    paths-ignore:
+      - 'CHANGELOG.md'
+      - 'package.json'
+  workflow_dispatch:
+  release:
+    types: [created]
 
 jobs:
-  changelog:
+  changelog-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Important for getting all commits
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Setup Node.js
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
-          node-version: '14'
+          node-version: '18'
           
-      - name: Install conventional-changelog
-        run: npm install -g conventional-changelog-cli
-          
-      - name: Generate Changelog
+      - name: Install dependencies
         run: |
-          conventional-changelog -p angular -i CHANGELOG.md -s -r 0
+          npm install -g conventional-changelog-cli
+          npm install -g semantic-release @semantic-release/git @semantic-release/changelog
           
-      - name: Commit and Push Changes
+      - name: Setup Git
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add CHANGELOG.md
-          git diff --quiet && git diff --staged --quiet || git commit -m "docs: Update CHANGELOG.md"
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+      - name: Generate Changelog and Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Generate only new changes
+          conventional-changelog -p angular -i CHANGELOG.md -s -r 1
+          
+          # Run semantic-release
+          npx semantic-release
+
+      - name: Push changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git add CHANGELOG.md package.json
+          git diff --quiet && git diff --staged --quiet || git commit -m "chore(release): update CHANGELOG.md and bump version [skip ci]"
           git push 
