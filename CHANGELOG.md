@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2](https://github.com/ZouhairMudakka/Autonomous-Job-Seeker/compare/v2.1.1...v2.1.2) (2025-01-29)
+
+
+### Bug Fixes
+
+* clean up README.md formatting and remove special characters ([538eb9d](https://github.com/ZouhairMudakka/Autonomous-Job-Seeker/commit/538eb9dc9b3bcde49654191d6cb9904a940792b8))
+
 ## [2.1.1](https://github.com/ZouhairMudakka/Autonomous-Job-Seeker/compare/v2.1.0...v2.1.1) (2025-01-29)
 
 
