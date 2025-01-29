@@ -15,6 +15,12 @@ This system uses multiple specialized AI agents to:
 
 For a detailed view of the project's directory structure and file organization, see [DIRECTORY_STRUCTURE.md](DIRECTORY_STRUCTURE.md)
 
+## Architecture Diagrams
+
+<!-- MERMAID-START -->
+<!-- Diagrams will be automatically synced from ARCHITECTURE.md -->
+<!-- MERMAID-END --> 
+
 ## Features
 
 ### Currently Active
@@ -289,4 +295,5 @@ To verify the integrity of the LICENSE file:
    - Solution strategy evolution
    - Success rate tracking
    - Automated strategy refinement
-   - Confidence score calibration 
+   - Confidence score calibration
+
