@@ -8,17 +8,20 @@ on:
       - 'CHANGELOG.md'
       - 'package.json'
   workflow_dispatch:
-  release:
-    types: [created]
 
 jobs:
-  changelog-version:
+  release:
+    name: Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
     
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -27,10 +30,11 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '18'
+          cache: 'npm'
           
       - name: Install dependencies
         run: |
-          npm install -g conventional-changelog-cli
+          npm ci || npm install
           npm install -g semantic-release @semantic-release/git @semantic-release/changelog
           
       - name: Setup Git
@@ -38,20 +42,8 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           
-      - name: Generate Changelog and Release
+      - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Generate only new changes
-          conventional-changelog -p angular -i CHANGELOG.md -s -r 1
-          
-          # Run semantic-release
-          npx semantic-release
-
-      - name: Push changes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git add CHANGELOG.md package.json
-          git diff --quiet && git diff --staged --quiet || git commit -m "chore(release): update CHANGELOG.md and bump version [skip ci]"
-          git push 
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release 
