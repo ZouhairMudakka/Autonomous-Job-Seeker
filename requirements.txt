@@ -91,7 +91,7 @@ typer>=0.15.1           # CLI interface building
 pyyaml>=6.0.2           # YAML configuration support
 jsonschema>=4.23.0      # JSON validation
 python-multipart>=0.0.20# Form data handling
-
+tkcalendar>=1.6.1       # Calendar widget for GUI
 
 # Async Dependencies
 asyncio>=3.4.3          # Async I/O support
