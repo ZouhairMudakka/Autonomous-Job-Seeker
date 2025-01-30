@@ -9,13 +9,15 @@ Features:
 - Selector success rate tracking
 """
 
-from utils.dom.dom_service import DomService
-from utils.dom.dom_models import DOMElementNode
-from storage.logs_manager import LogsManager
-from typing import Optional, Union
+from typing import Optional, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from utils.dom.dom_service import DomService
+    from utils.dom.dom_models import DOMElementNode
+    from storage.logs_manager import LogsManager
 
 class LinkedInLocators:
-    def __init__(self, logs_manager: Optional[LogsManager] = None):
+    def __init__(self, logs_manager: Optional['LogsManager'] = None):
         """
         Initialize LinkedIn locators with optional logging.
         
@@ -65,7 +67,7 @@ class LinkedInLocators:
     ]
     
     @classmethod
-    async def get_fallback_patterns(cls, selector_type: str, logs_manager: Optional[LogsManager] = None) -> list:
+    async def get_fallback_patterns(cls, selector_type: str, logs_manager: Optional['LogsManager'] = None) -> list:
         """Get AI-generated fallback patterns for selector types."""
         if logs_manager:
             await logs_manager.debug(f"[LinkedInLocators] Generating fallback patterns for {selector_type}")
@@ -78,7 +80,7 @@ class LinkedInLocators:
         page,
         selector_type: str,
         dom_fallback: bool = True,
-        logs_manager: Optional[LogsManager] = None
+        logs_manager: Optional['LogsManager'] = None
     ) -> Optional[str]:
         """
         Get selector with optional DOM-based fallback.
@@ -153,7 +155,7 @@ class LinkedInLocators:
     async def _matches_selector_type(
         element: 'DOMElementNode',
         selector_type: str,
-        logs_manager: Optional[LogsManager] = None
+        logs_manager: Optional['LogsManager'] = None
     ) -> bool:
         """
         Check if DOM element matches the selector type.
