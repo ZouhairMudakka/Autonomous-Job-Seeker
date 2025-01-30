@@ -27,6 +27,7 @@ from ui.cli import CLI
 from storage.logs_manager import LogsManager
 from ui.minimal_gui import MinimalGUI
 from utils.browser_setup import BrowserSetup
+from utils.telemetry import TelemetryManager
 from constants import TimingConstants, Messages
 
 async def async_main():
@@ -38,13 +39,15 @@ async def async_main():
     logs_manager = None
     controller = None
     browser_setup = None
+    telemetry_manager = None
 
     try:
         # 1) Load configuration
         settings = load_settings()
         
-        # 2) Initialize logs with proper cleanup handling
-        logs_manager = LogsManager(settings)
+        # 2) Initialize telemetry and logs with proper cleanup handling
+        telemetry_manager = TelemetryManager(settings)
+        logs_manager = LogsManager(settings, telemetry_manager)
         await logs_manager.initialize()
         await logs_manager.info("Starting AI-Powered Job Application System...")
         await logs_manager.info("Configuration loaded successfully")
