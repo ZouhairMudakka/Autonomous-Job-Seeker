@@ -58,20 +58,29 @@ Dependencies:
 """
 
 import asyncio
+from pathlib import Path
+from typing import Optional, List, Dict, Tuple, TYPE_CHECKING
+from playwright.async_api import Page
+
 from agents.linkedin_agent import LinkedInAgent
 from agents.credentials_agent import CredentialsAgent
 from agents.tracker_agent import TrackerAgent
 from constants import TimingConstants, Messages
 from orchestrator.task_manager import TaskManager
-from pathlib import Path
 from utils.telemetry import TelemetryManager
 from agents.ai_navigator import AINavigator
 from datetime import datetime, timedelta
 from agents.cv_parser_agent import CVParserAgent
 from storage.logs_manager import LogsManager
+from utils.dom.dom_service import DomService
+
+if TYPE_CHECKING:
+    from agents.general_agent import GeneralAgent
+    from agents.form_filler_agent import FormFillerAgent
+    from agents.user_profile_agent import UserProfileAgent
 
 class Controller:
-    def __init__(self, settings, page, logs_manager: LogsManager):
+    def __init__(self, settings: Dict, page: Page, logs_manager: Optional['LogsManager'] = None):
         """Initialize the controller with settings and browser page."""
         self.settings = settings
         self.page = page
@@ -95,6 +104,7 @@ class Controller:
         self.ai_navigator = AINavigator(
             page=self.page,
             settings=self.settings,
+            logs_manager=self.logs_manager,
             min_confidence=settings.get('min_confidence', 0.8),
             max_retries=self.max_retries
         )
