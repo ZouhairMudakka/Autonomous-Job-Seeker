@@ -35,6 +35,7 @@ class TaskManager:
         self.max_concurrent = 3
         self.queue_check_interval = TimingConstants.QUEUE_CHECK_INTERVAL
         self.task_timeout = TimingConstants.TASK_TIMEOUT
+        self.logs_manager = controller.logs_manager
 
     async def create_task(self, coroutine: Coroutine, task_id: str = None) -> Task:
         """Create a new task."""
