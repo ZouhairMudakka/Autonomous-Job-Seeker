@@ -14,6 +14,52 @@ Future Enhancements:
 - Potential 'ui/components/' folder if the GUI grows significantly
 - Switch between modes (auto / CLI / GUI) on the fly (for now, user restarts app)
 
+Additional Future Components to be Implemented:
+---------------------------------------------
+
+1. Real-time Job Processing View:
+   - Live job card display
+   - Current job being processed
+   - Queue visualization
+   - Match score display
+   - Application status tracking
+
+2. AI Decision Visualization:
+   - AI confidence scores display
+   - Decision tree visualization
+   - Real-time strategy adjustments
+   - Fallback triggers display
+   - AI reasoning explanation panel
+
+3. Multi-Platform Integration:
+   - Platform selection interface
+   - Platform-specific settings
+   - Cross-platform job tracking
+   - Integration status monitoring
+   - Platform performance metrics
+
+4. Advanced Analytics Dashboard:
+   - Job market trends visualization
+   - Success rate analytics
+   - Skill demand graphs
+   - Salary range analysis
+   - Geographic opportunity mapping
+
+5. Profile Management:
+   - Resume version control
+   - Cover letter template management
+   - Skill matrix editor
+   - Experience highlighting tools
+   - Profile optimization suggestions
+
+These components would be implemented as separate classes in the ui/components/ folder:
+    components/
+    ├── job_processing.py      # JobProcessingView
+    ├── ai_decision.py         # AIDecisionView
+    ├── platform_manager.py    # PlatformManagerView
+    ├── analytics.py           # AnalyticsDashboard
+    └── profile_manager.py     # ProfileManager
+
 Important MVP Notes:
 -------------------
 1) We do not handle extensive concurrency. We rely on the user not to spam 
