@@ -153,28 +153,32 @@ def load_settings() -> dict:
             'data_dir': base_data_dir  # Ensure data_dir is set
         },
         'linkedin': {
-            'email': os.getenv('LINKEDIN_EMAIL', ''),  # Empty string if not set
-            'password': os.getenv('LINKEDIN_PASSWORD', ''),  # Empty string if not set
+            'email': os.getenv('LINKEDIN_EMAIL', ''),
+            'password': os.getenv('LINKEDIN_PASSWORD', ''),
             'default_timeout': int(os.getenv('LINKEDIN_TIMEOUT', '10000')),
             'min_delay': float(os.getenv('LINKEDIN_MIN_DELAY', '1.0')),
             'max_delay': float(os.getenv('LINKEDIN_MAX_DELAY', '3.0')),
-            'max_retries': int(os.getenv('LINKEDIN_MAX_RETRIES', '3'))
+            'max_retries': int(os.getenv('LINKEDIN_MAX_RETRIES', '3')),
+            'job_search_limit': int(os.getenv('LINKEDIN_JOB_SEARCH_LIMIT', '50')),
+            'auto_apply_enabled': os.getenv('LINKEDIN_AUTO_APPLY', 'False').lower() == 'true'
         },
-        'api': {
-            'key': os.getenv('API_KEY', ''),  # Empty string if not set
-            'base_url': os.getenv('API_BASE_URL', 'http://localhost'),  # Default value
-            'timeout': int(os.getenv('API_TIMEOUT', '30'))  # Default 30 seconds
-        },
-        'system': {
-            'debug_mode': os.getenv('DEBUG_MODE', 'False').lower() == 'true',
-            'log_level': os.getenv('LOG_LEVEL', 'INFO').upper(),
-            'data_dir': base_data_dir,  # Also set here
-            'max_retries': int(os.getenv('MAX_RETRIES', '3')),
-            'retry_delay': float(os.getenv('RETRY_DELAY', '1.0'))
+        'logging': {
+            'level': os.getenv('LOG_LEVEL', 'INFO').upper(),
+            'file_rotation_size': int(os.getenv('LOG_ROTATION_SIZE', '5242880')),
+            'retention_days': int(os.getenv('LOG_RETENTION_DAYS', '30')),
+            'console_output': os.getenv('LOG_CONSOLE_OUTPUT', 'True').lower() == 'true'
         },
         'telemetry': {
             'enabled': os.getenv('TELEMETRY_ENABLED', 'true').lower() == 'true',
-            'storage_path': os.getenv('TELEMETRY_STORAGE_PATH', './data/telemetry')
+            'storage_path': os.getenv('TELEMETRY_STORAGE_PATH', './data/telemetry'),
+            'buffer_size': int(os.getenv('TELEMETRY_BUFFER_SIZE', '100')),
+            'confidence_tracking': os.getenv('TELEMETRY_CONFIDENCE_TRACKING', 'true').lower() == 'true'
+        },
+        'system': {
+            'data_dir': base_data_dir,
+            'debug_mode': os.getenv('DEBUG_MODE', 'False').lower() == 'true',
+            'max_retries': int(os.getenv('MAX_RETRIES', '3')),
+            'retry_delay': float(os.getenv('RETRY_DELAY', '1.0'))
         }
     }
     
