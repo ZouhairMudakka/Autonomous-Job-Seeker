@@ -40,12 +40,16 @@ class TrackerAgent:
             logs_manager (LogsManager, optional): Instance of LogsManager for logging.
                 If not provided, direct prints will be used as fallback.
         """
+        # Store logs_manager reference
+        self.logs_manager = logs_manager
+        
+        # Log initialization start
+        if self.logs_manager:
+            asyncio.create_task(self.logs_manager.info("[TrackerAgent] Initializing tracker agent..."))
+
         self.data_dir = Path(settings.get("data_dir", "./logs"))
         self.data_dir.mkdir(exist_ok=True)
         self.activity_file = self.data_dir / "activity_log.csv"
-
-        # Store logs_manager reference
-        self.logs_manager = logs_manager
 
         # Set a max file size for rotation
         self.max_file_size_bytes = settings.get("max_file_size_bytes", 5_000_000)  # default 5 MB
@@ -77,6 +81,10 @@ class TrackerAgent:
         self.state_history = []
         self.metrics = {}
 
+        # Log initialization complete
+        if self.logs_manager:
+            asyncio.create_task(self.logs_manager.info("[TrackerAgent] Initialization complete"))
+
     async def log_activity(
         self,
         activity_type: str,
@@ -105,9 +113,7 @@ class TrackerAgent:
         # Log for real-time feedback
         log_msg = f"{timestamp_str} | {agent_name} | {activity_type} | {details} | {status}"
         if self.logs_manager:
-            await self.logs_manager.info(f"[Tracker] {log_msg}")
-        else:
-            print(f"[Tracker] {log_msg}")
+            await self.logs_manager.info(f"[TrackerAgent] Activity: {log_msg}")
 
         df = pd.DataFrame([activity], columns=self.log_columns)
 
@@ -120,12 +126,19 @@ class TrackerAgent:
                 await self._rotate_if_needed()
 
                 file_exists = self.activity_file.exists()
+                
+                if self.logs_manager:
+                    await self.logs_manager.debug(f"[TrackerAgent] Writing activity to CSV: {activity_type}")
+                
                 df.to_csv(
                     self.activity_file,
                     mode="a",
                     header=not file_exists,
                     index=False
                 )
+
+                if self.logs_manager:
+                    await self.logs_manager.debug("[TrackerAgent] Successfully wrote activity to CSV")
 
                 # Add delay after file operations
                 await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
@@ -174,9 +187,7 @@ class TrackerAgent:
             error_msg = f"Error reading CSV: {e}"
             if self.logs_manager:
                 await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
-            else:
-                print(f"[TrackerAgent] {error_msg}")
-            await asyncio.sleep(TimingConstants.ERROR_DELAY)
+                await asyncio.sleep(TimingConstants.ERROR_DELAY)
             return pd.DataFrame(columns=self.log_columns)
 
     async def _rotate_if_needed(self):
@@ -197,12 +208,13 @@ class TrackerAgent:
                 # Add delay before file rotation
                 await asyncio.sleep(TimingConstants.ACTION_DELAY)
                 
-                self.activity_file.rename(rotated_name)
-                log_msg = f"Log file rotated. Old file: {rotated_name}"
                 if self.logs_manager:
-                    await self.logs_manager.info(f"[TrackerAgent] {log_msg}")
-                else:
-                    print(f"[TrackerAgent] {log_msg}")
+                    await self.logs_manager.info(f"[TrackerAgent] Rotating log file. Size: {file_size} bytes")
+                
+                self.activity_file.rename(rotated_name)
+                
+                if self.logs_manager:
+                    await self.logs_manager.info(f"[TrackerAgent] Log file rotated to: {rotated_name}")
                 
                 # Add delay after file rotation
                 await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
@@ -211,8 +223,6 @@ class TrackerAgent:
                 error_msg = f"Error rotating log file: {e}"
                 if self.logs_manager:
                     await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
-                else:
-                    print(f"[TrackerAgent] {error_msg}")
                 await asyncio.sleep(TimingConstants.ERROR_DELAY)
 
     async def get_recent_activities(
@@ -222,6 +232,13 @@ class TrackerAgent:
         status: str = None
     ) -> list[dict]:
         """Get recent activities within timeframe."""
+        if self.logs_manager:
+            await self.logs_manager.debug(
+                f"[TrackerAgent] Retrieving recent activities for past {timeframe_minutes} minutes"
+                f"{f' with type {activity_type}' if activity_type else ''}"
+                f"{f' and status {status}' if status else ''}"
+            )
+        
         await self._load_activities()  # Load from disk before querying
         cutoff_time = datetime.now() - timedelta(minutes=timeframe_minutes)
         
@@ -231,7 +248,7 @@ class TrackerAgent:
             else activity_type
         )
         
-        return [
+        filtered_activities = [
             activity for activity in self.activity_history
             if (
                 activity['timestamp'] >= cutoff_time and
@@ -239,6 +256,13 @@ class TrackerAgent:
                 (not status or activity['status'] == status)
             )
         ]
+
+        if self.logs_manager:
+            await self.logs_manager.info(
+                f"[TrackerAgent] Found {len(filtered_activities)} activities in the specified timeframe"
+            )
+        
+        return filtered_activities
 
     async def _load_activities(self):
         """Load activities from disk."""
