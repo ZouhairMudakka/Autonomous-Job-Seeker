@@ -1,12 +1,15 @@
 """DOM Element Models and Node Structures"""
 
+import asyncio
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
+from storage.logs_manager import LogsManager
 
 @dataclass
 class DOMBaseNode:
     """Base node type, can be 'element' or 'text'."""
     type: str
+    logs_manager: Optional[LogsManager] = None
 
 @dataclass
 class DOMTextNode(DOMBaseNode):
@@ -22,16 +25,39 @@ class DOMElementNode(DOMBaseNode):
     highlight_index: Optional[int] = None
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'DOMBaseNode':
+    async def from_dict(cls, data: Dict, logs_manager: Optional[LogsManager] = None) -> 'DOMBaseNode':
+        """Create a DOM node from a dictionary representation.
+        
+        Args:
+            data: Dictionary containing node data
+            logs_manager: Optional LogsManager instance for logging
+        """
         node_type = data.get('type')
+        
+        if logs_manager:
+            await logs_manager.debug(f"Creating DOM node of type: {node_type}")
+            
         if node_type == 'text':
+            if logs_manager:
+                await logs_manager.debug(f"Creating text node with content length: {len(data.get('content', ''))}")
             return DOMTextNode(
                 type='text',
-                content=data.get('content', '')
+                content=data.get('content', ''),
+                logs_manager=logs_manager
             )
         elif node_type == 'element':
+            if logs_manager:
+                await logs_manager.debug(f"Creating element node with tag: {data.get('tag', '')}")
+            
             children_data = data.get('children', [])
-            children_nodes = [cls.from_dict(child) for child in children_data]
+            children_nodes = []
+            
+            for child_data in children_data:
+                child = await cls.from_dict(child_data, logs_manager)
+                children_nodes.append(child)
+            
+            if logs_manager:
+                await logs_manager.debug(f"Created element with {len(children_nodes)} children")
 
             return DOMElementNode(
                 type='element',
@@ -40,20 +66,33 @@ class DOMElementNode(DOMBaseNode):
                 children=children_nodes,
                 is_clickable=data.get('isClickable', False),
                 is_visible=data.get('isVisible', False),
-                highlight_index=data.get('highlightIndex')
+                highlight_index=data.get('highlightIndex'),
+                logs_manager=logs_manager
             )
         else:
-            # Fallback, if unknown type
-            return DOMTextNode(type='text', content='')
+            if logs_manager:
+                await logs_manager.warning(f"Unknown node type: {node_type}, falling back to text node")
+            return DOMTextNode(type='text', content='', logs_manager=logs_manager)
 
-    def find_clickable_elements(self) -> List['DOMElementNode']:
+    async def find_clickable_elements(self) -> List['DOMElementNode']:
         """Collect all clickable & visible child elements (including self)."""
         result = []
-        if self.is_clickable and self.is_visible:
-            result.append(self)
+        
+        if self.logs_manager:
+            await self.logs_manager.debug(f"Searching for clickable elements in {self.tag if hasattr(self, 'tag') else 'text node'}")
+        
+        if isinstance(self, DOMElementNode):
+            if self.is_clickable and self.is_visible:
+                if self.logs_manager:
+                    await self.logs_manager.debug(f"Found clickable element: {self.tag} with attributes {self.attributes}")
+                result.append(self)
 
-        for child in self.children:
-            if isinstance(child, DOMElementNode):
-                result.extend(child.find_clickable_elements())
+            for child in self.children:
+                if isinstance(child, DOMElementNode):
+                    child_elements = await child.find_clickable_elements()
+                    result.extend(child_elements)
 
+        if self.logs_manager:
+            await self.logs_manager.debug(f"Found {len(result)} total clickable elements in subtree")
+            
         return result
