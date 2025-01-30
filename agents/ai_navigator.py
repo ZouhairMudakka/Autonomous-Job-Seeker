@@ -84,11 +84,11 @@ class AINavigator:
         self.telemetry = TelemetryManager(settings)
         self.locators = LinkedInLocators()
 
-        # Optionally store references to other agents for integrated steps
-        self.credentials_agent = CredentialsAgent(settings)
-        self.form_filler_agent = FormFillerAgent(self.dom_service)  # if that's how it's constructed
-        self.user_profile_agent = UserProfileAgent(settings)
-        self.tracker_agent = TrackerAgent(settings)
+        # Initialize agents with proper parameters
+        self.credentials_agent = CredentialsAgent(settings, self.dom_service, logs_manager)
+        self.form_filler_agent = FormFillerAgent(self.dom_service, logs_manager, settings)
+        self.user_profile_agent = UserProfileAgent(settings, logs_manager)
+        self.tracker_agent = TrackerAgent(settings, logs_manager)
 
     async def navigate(self, action, context) -> Tuple[bool, float]:
         """
