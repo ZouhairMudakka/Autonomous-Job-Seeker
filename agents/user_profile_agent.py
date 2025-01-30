@@ -12,6 +12,7 @@ Features:
 - CSV storage (for MVP), easy to switch to JSON or DB later
 """
 
+# Importing necessary modules
 import csv
 import json
 import os
