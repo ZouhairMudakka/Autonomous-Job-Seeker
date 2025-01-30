@@ -86,9 +86,15 @@ import csv
 try:
     from tkcalendar import Calendar  # Use tkcalendar instead of tkinter.Calendar
 except ImportError:
-    print("Warning: tkcalendar not installed. Calendar functionality will be limited.")
+    # Create a temporary LogsManager for this warning since we're outside the class
+    temp_logger = LogsManager({'system': {'data_dir': './data', 'log_level': 'INFO'}})
+    asyncio.run(temp_logger.initialize())
+    asyncio.run(temp_logger.warning("tkcalendar not installed. Calendar functionality will be limited."))
     Calendar = None
 import os
+from storage.logs_manager import LogsManager  # Add LogsManager import
+import psutil
+import time
 
 # Constants for better maintainability
 ACTIVITY_TYPES = {
@@ -116,17 +122,132 @@ LOG_LEVELS = {
     "ERROR": {"color": "#dc3545"}
 }
 
+class PerformanceMonitor:
+    """Context manager for monitoring performance of operations."""
+    def __init__(self, gui, operation: str):
+        self.gui = gui
+        self.operation = operation
+        self.start_time = None
+        self.start_memory = None
+        
+    async def __aenter__(self):
+        """Start monitoring."""
+        self.start_time = time.time()
+        try:
+            process = psutil.Process()
+            self.start_memory = process.memory_info().rss
+        except Exception:
+            self.start_memory = None
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """End monitoring and log results."""
+        try:
+            end_time = time.time()
+            duration = end_time - self.start_time
+            
+            performance_data = {
+                "operation": self.operation,
+                "start_time": datetime.fromtimestamp(self.start_time).isoformat(),
+                "duration": duration,
+                "success": exc_type is None
+            }
+            
+            # Add memory metrics if available
+            if self.start_memory is not None:
+                try:
+                    process = psutil.Process()
+                    end_memory = process.memory_info().rss
+                    memory_delta = end_memory - self.start_memory
+                    performance_data.update({
+                        "memory_before": self.start_memory,
+                        "memory_after": end_memory,
+                        "memory_delta": memory_delta
+                    })
+                except Exception as e:
+                    await self.gui.logs_manager.warning(f"Failed to get memory metrics: {e}")
+            
+            # Add error information if operation failed
+            if exc_type is not None:
+                performance_data.update({
+                    "error_type": exc_type.__name__,
+                    "error_message": str(exc_val)
+                })
+            
+            # Log performance data
+            await self.gui.logs_manager.info(
+                f"Performance data: {json.dumps(performance_data, default=str)}"
+            )
+            
+            # Track slow operations
+            if duration > 1.0:  # More than 1 second
+                await self.gui.logs_manager.warning(
+                    f"Slow operation detected: {self.operation} took {duration:.2f} seconds"
+                )
+                
+                # Track in telemetry
+                await self.gui._track_telemetry("slow_operation", performance_data)
+            
+            # Track memory spikes
+            if self.start_memory is not None and memory_delta > 50 * 1024 * 1024:  # 50MB
+                await self.gui.logs_manager.warning(
+                    f"High memory usage in operation: {self.operation} "
+                    f"delta={memory_delta / 1024 / 1024:.1f}MB"
+                )
+                
+                # Track in telemetry
+                await self.gui._track_telemetry("high_memory_usage", performance_data)
+            
+        except Exception as e:
+            await self.gui.logs_manager.error(
+                f"Failed to log performance data: {str(e)}",
+                context={
+                    "operation": self.operation,
+                    "duration": time.time() - self.start_time
+                }
+            )
+
+async def monitor_performance(self, operation: str):
+    """Get a performance monitoring context manager."""
+    return PerformanceMonitor(self, operation)
+
 class MinimalGUI:
     def __init__(self, controller):
         """Initialize the GUI with a reference to the automation controller."""
+        # Initialize state tracking
+        self.initialization_state = {
+            "logs_manager": False,
+            "telemetry": False,
+            "event_loop": False,
+            "ui_components": False,
+            "settings": False
+        }
+        
         self.controller = controller
+        
+        # Get logs_manager from controller or create new instance
+        self.logs_manager = getattr(controller, 'logs_manager', None)
+        if not self.logs_manager:
+            # If controller doesn't have logs_manager, create a new one with default settings
+            self.logs_manager = LogsManager({'system': {'data_dir': './data', 'log_level': 'INFO'}})
+            self.run_coroutine_in_background(self.logs_manager.initialize())
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Created new LogsManager instance")
+            )
+        self.initialization_state["logs_manager"] = True
         
         # Initialize telemetry with error handling
         self.telemetry = None
         try:
             self.telemetry = TelemetryManager(controller.settings)
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Telemetry manager initialized successfully")
+            )
+            self.initialization_state["telemetry"] = True
         except Exception as e:
-            print(f"Warning: Failed to initialize telemetry: {e}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to initialize telemetry: {e}")
+            )
 
         # Add background event loop setup
         self.loop = None
@@ -138,25 +259,44 @@ class MinimalGUI:
                 daemon=True
             )
             self.background_thread.start()
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Background event loop initialized and started")
+            )
+            self.initialization_state["event_loop"] = True
         except Exception as e:
-            print(f"Error setting up event loop: {e}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error setting up event loop: {e}")
+            )
             raise
 
-        # Initialize states
-        self.is_running = False
-        self.is_paused = False
-        self.start_time: Optional[datetime] = None
-        self.last_error_time = None
-        self.error_count = 0
+        # Initialize states with enhanced tracking
+        self.state = {
+            "is_running": False,
+            "is_paused": False,
+            "start_time": None,
+            "last_error_time": None,
+            "error_count": 0,
+            "last_activity": None,
+            "last_state_change": datetime.now().isoformat()
+        }
+        self.run_coroutine_in_background(
+            self.logs_manager.info(f"Initial state initialized: {json.dumps(self.state)}")
+        )
 
         # Setup main window
         self.window = tk.Tk()
         self.window.title("LinkedIn Automation Control (MVP)")
         self.window.geometry("500x600")
         self.window.resizable(True, True)
+        self.run_coroutine_in_background(
+            self.logs_manager.info("Main window created and configured")
+        )
         
         # Add window close handler
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.run_coroutine_in_background(
+            self.logs_manager.info("Window close handler registered")
+        )
 
         # Note: we add a comment disclaiming pressing buttons too quickly:
         self.press_note = (
@@ -170,12 +310,28 @@ class MinimalGUI:
         # Initialize settings
         self.settings_file = Path("ui/settings.json")
         self.settings = self.load_settings()
+        self.initialization_state["settings"] = True
+        self.run_coroutine_in_background(
+            self.logs_manager.info(f"Settings loaded from file: {json.dumps(self.settings)}")
+        )
 
         # Setup tab-based UI
         self.setup_ui()
+        self.initialization_state["ui_components"] = True
+        self.run_coroutine_in_background(
+            self.logs_manager.info("UI setup completed")
+        )
+
+        # Log initialization completion status
+        self.run_coroutine_in_background(
+            self.logs_manager.info(f"Initialization state: {json.dumps(self.initialization_state)}")
+        )
 
         # Start periodic update loop
         self.update_status_loop()
+        self.run_coroutine_in_background(
+            self.logs_manager.info("Status update loop started")
+        )
 
     def _run_event_loop(self):
         """Run the event loop with error handling and recovery."""
@@ -184,17 +340,23 @@ class MinimalGUI:
                 asyncio.set_event_loop(self.loop)
                 self.loop.run_forever()
             except Exception as e:
-                self.log_error(f"Event loop error: {e}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Event loop error: {e}")
+                )
                 # Only attempt recovery if we're still running
-                if self.is_running:
-                    self.log_to_console("Attempting to recover event loop...", level="WARNING")
+                if self.state["is_running"]:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.warning("Attempting to recover event loop...")
+                    )
                     try:
                         # Create new event loop
                         self.loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(self.loop)
                         continue
                     except Exception as recovery_error:
-                        self.log_error(f"Failed to recover event loop: {recovery_error}")
+                        self.run_coroutine_in_background(
+                            self.logs_manager.error(f"Failed to recover event loop: {recovery_error}")
+                        )
                 break
             except KeyboardInterrupt:
                 break
@@ -209,11 +371,11 @@ class MinimalGUI:
                     success=True
                 )
             except Exception as e:
-                print(f"Warning: Failed to track telemetry: {e}")
+                await self.logs_manager.warning(f"Failed to track telemetry: {e}")
 
     def on_closing(self):
         """Handle window closing event."""
-        if self.is_running:
+        if self.state["is_running"]:
             self.run_coroutine_in_background(self.stop_automation())
         self.stop()
 
@@ -491,7 +653,9 @@ class MinimalGUI:
                 ).pack(pady=5)
                 
             except Exception as e:
-                self.log_error(f"Error showing calendar: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Error showing calendar: {str(e)}")
+                )
 
         def on_time_filter_change(self, event=None):
             """Handle time filter changes."""
@@ -513,7 +677,9 @@ class MinimalGUI:
                 self.apply_activity_filter()
                 
             except Exception as e:
-                self.log_error(f"Error changing time filter: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Error changing time filter: {str(e)}")
+                )
 
         def apply_date_range(self):
             """Apply custom date range filter."""
@@ -523,17 +689,15 @@ class MinimalGUI:
                     from_date = datetime.strptime(self.from_date_var.get(), "%Y-%m-%d %H:%M")
                     to_date = datetime.strptime(self.to_date_var.get(), "%Y-%m-%d %H:%M")
                 except ValueError:
-                    self.log_to_console(
-                        "Invalid date format. Use YYYY-MM-DD HH:MM",
-                        level="ERROR"
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error("Invalid date format. Use YYYY-MM-DD HH:MM")
                     )
                     return
                 
                 # Validate date range
                 if from_date > to_date:
-                    self.log_to_console(
-                        "Start date must be before end date",
-                        level="ERROR"
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error("Start date must be before end date")
                     )
                     return
                 
@@ -541,7 +705,9 @@ class MinimalGUI:
                 self.apply_activity_filter()
                 
             except Exception as e:
-                self.log_error(f"Error applying date range: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Error applying date range: {str(e)}")
+                )
 
         # Add methods to the class
         MinimalGUI.show_calendar = show_calendar
@@ -676,7 +842,9 @@ class MinimalGUI:
                     self._activity_content = "\n".join(lines[-200:]) + "\n"
                     
             except Exception as e:
-                self.log_error(f"Error updating activity: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Error updating activity: {str(e)}")
+                )
 
         # Core AI Activities
         async def on_ai_thinking(self, message: str, agent_name: str = None):
@@ -1239,75 +1407,208 @@ class MinimalGUI:
         )
 
     async def start_automation(self):
-        """Start the automation process."""
-        await self._track_telemetry("click", {"action": "Start Automation"})
-        self.log_to_console("Start button pressed. Attempting to start session.")
-        self.is_running = True
-        self.is_paused = False
-        self.start_time = datetime.now()
-
-        self.status_var.set("Running")
-        self.status_label.config(foreground="green")
-
-        self.start_button.config(state=tk.DISABLED)
-        self.pause_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.NORMAL)
-
+        """Start the automation process with enhanced logging and state tracking."""
         try:
-            await self.controller.start_session()
-            self.log_to_console("Session started successfully.")
-        except Exception as e:
-            self.log_error(f"Error starting session: {str(e)}")
+            # Log attempt and validate current state
+            await self.logs_manager.info("Start automation requested")
+            if self.state["is_running"]:
+                await self.logs_manager.warning("Start requested while already running - ignoring")
+                return
+                
+            # Track button click
+            await self._track_telemetry("click", {
+                "action": "Start Automation",
+                "previous_state": {
+                    "is_running": self.state["is_running"],
+                    "is_paused": self.state["is_paused"]
+                }
+            })
 
-        self._update_extension_status()
+            # Update state
+            self.state["is_running"] = True
+            self.state["is_paused"] = False
+            self.state["start_time"] = datetime.now()
+
+            # Log state transition
+            await self.logs_manager.info(
+                f"State transition: Running={self.state['is_running']}, Paused={self.state['is_paused']}"
+            )
+
+            # Update UI state
+            self.status_var.set("Running")
+            self.status_label.config(foreground="green")
+
+            # Update button states with logging
+            await self.logs_manager.info("Updating button states...")
+            self.start_button.config(state=tk.DISABLED)
+            self.pause_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.NORMAL)
+            await self.logs_manager.info("Button states updated: Start=DISABLED, Pause=NORMAL, Stop=NORMAL")
+
+            # Start session
+            try:
+                await self.controller.start_session()
+                await self.logs_manager.info("Session started successfully")
+            except Exception as e:
+                await self.logs_manager.error(f"Session start failed: {str(e)}")
+                # Revert state on session start failure
+                self.state["is_running"] = False
+                self.state["is_paused"] = False
+                self.state["start_time"] = None
+                self.start_button.config(state=tk.NORMAL)
+                self.pause_button.config(state=tk.DISABLED)
+                self.stop_button.config(state=tk.DISABLED)
+                await self.logs_manager.info("Reverted to initial state due to session start failure")
+                raise
+
+            # Update extension status
+            self._update_extension_status()
+            await self.logs_manager.info("Extension status updated")
+
+        except Exception as e:
+            await self.logs_manager.error(f"Critical error in start_automation: {str(e)}")
+            # Ensure consistent state
+            self._ensure_consistent_state()
+            raise
 
     async def pause_automation(self):
-        """Pause/Resume the automation."""
-        await self._track_telemetry("click", {"action": "Pause"})
-        self.log_to_console("Pause/Resume button pressed.")
-        self.is_paused = not self.is_paused
-        status = "Paused" if self.is_paused else "Running"
-        button_text = "Resume" if self.is_paused else "Pause"
-
-        self.status_var.set(status)
-        self.status_label.config(foreground="orange" if self.is_paused else "green")
-        self.pause_button.config(text=button_text)
-
+        """Pause/Resume the automation with enhanced logging and state tracking."""
         try:
-            if self.is_paused:
-                # We assume controller has 'pause_session'
-                await self.controller.pause_session()
-                self.log_to_console("Session paused.")
-            else:
-                # We assume controller has 'resume_session'
-                await self.controller.resume_session()
-                self.log_to_console("Session resumed.")
-        except Exception as e:
-            self.log_error(f"Error pausing/resuming: {str(e)}")
+            # Log attempt and validate current state
+            current_state = "paused" if self.state["is_paused"] else "running"
+            await self.logs_manager.info(f"Pause/Resume requested (current state: {current_state})")
+            
+            if not self.state["is_running"]:
+                await self.logs_manager.warning("Pause/Resume requested while not running - ignoring")
+                return
 
-        self._update_extension_status()
+            # Track button click with state context
+            await self._track_telemetry("click", {
+                "action": "Pause",
+                "previous_state": {
+                    "is_running": self.state["is_running"],
+                    "is_paused": self.state["is_paused"]
+                }
+            })
+
+            # Update state
+            self.state["is_paused"] = not self.state["is_paused"]
+            new_state = "Paused" if self.state["is_paused"] else "Running"
+            button_text = "Resume" if self.state["is_paused"] else "Pause"
+
+            # Log state transition
+            await self.logs_manager.info(
+                f"State transition: Running={self.state['is_running']}, Paused={self.state['is_paused']}"
+            )
+
+            # Update UI state
+            self.status_var.set(new_state)
+            self.status_label.config(foreground="orange" if self.state["is_paused"] else "green")
+            self.pause_button.config(text=button_text)
+
+            # Log UI updates
+            await self.logs_manager.info(f"UI updated: Status={new_state}, Button={button_text}")
+
+            # Update session state
+            try:
+                if self.state["is_paused"]:
+                    await self.controller.pause_session()
+                    self.pause_time = datetime.now()
+                    await self.logs_manager.info("Session paused successfully")
+                else:
+                    await self.controller.resume_session()
+                    await self.logs_manager.info("Session resumed successfully")
+            except Exception as e:
+                # On session state change failure, revert the pause state
+                self.state["is_paused"] = not self.state["is_paused"]
+                self.status_var.set("Running" if not self.state["is_paused"] else "Paused")
+                self.status_label.config(foreground="green" if not self.state["is_paused"] else "orange")
+                self.pause_button.config(text="Pause" if not self.state["is_paused"] else "Resume")
+                await self.logs_manager.error(f"Failed to {new_state.lower()} session: {str(e)}")
+                await self.logs_manager.info("Reverted to previous state due to session state change failure")
+                raise
+
+            # Update extension status
+            self._update_extension_status()
+            await self.logs_manager.info("Extension status updated")
+
+        except Exception as e:
+            await self.logs_manager.error(f"Critical error in pause_automation: {str(e)}")
+            # Ensure consistent state
+            self._ensure_consistent_state()
+            raise
 
     async def stop_automation(self):
-        """Stop the automation process."""
-        await self._track_telemetry("click", {"action": "Stop"})
-        self.log_to_console("Stop button pressed. Stopping session.")
-        self.is_running = False
-        self.is_paused = False
-        self.start_time = None
-
-        self.status_var.set("Stopped")
-        self.status_label.config(foreground="red")
-        self.start_button.config(state=tk.NORMAL)
-        self.pause_button.config(state=tk.DISABLED, text="Pause")
-        self.stop_button.config(state=tk.DISABLED)
-
+        """Stop the automation process with enhanced logging and state tracking."""
         try:
-            await self.controller.end_session()
-            self.log_to_console("Session ended.")
-        except Exception as e:
-            self.log_error(f"Error ending session: {str(e)}")
+            # Log attempt and validate current state
+            await self.logs_manager.info(
+                f"Stop requested (current state: Running={self.state['is_running']}, Paused={self.state['is_paused']})"
+            )
+            
+            if not self.state["is_running"]:
+                await self.logs_manager.warning("Stop requested while not running - ignoring")
+                return
 
-        self._update_extension_status()
+            # Track button click with state context
+            await self._track_telemetry("click", {
+                "action": "Stop",
+                "previous_state": {
+                    "is_running": self.state["is_running"],
+                    "is_paused": self.state["is_paused"],
+                    "runtime": self._get_total_runtime()
+                }
+            })
+
+            # Update state
+            self.state["is_running"] = False
+            self.state["is_paused"] = False
+            end_time = datetime.now()
+            total_runtime = end_time - self.state["start_time"] if self.state["start_time"] else timedelta(0)
+            self.state["start_time"] = None
+
+            # Log state transition
+            await self.logs_manager.info(
+                f"State transition: Running=False, Paused=False, Total Runtime={total_runtime}"
+            )
+
+            # Update UI state
+            self.status_var.set("Stopped")
+            self.status_label.config(foreground="red")
+            
+            # Update button states with logging
+            await self.logs_manager.info("Updating button states...")
+            self.start_button.config(state=tk.NORMAL)
+            self.pause_button.config(state=tk.DISABLED, text="Pause")
+            self.stop_button.config(state=tk.DISABLED)
+            await self.logs_manager.info("Button states updated: Start=NORMAL, Pause=DISABLED, Stop=DISABLED")
+
+            # End session
+            try:
+                await self.controller.end_session()
+                await self.logs_manager.info("Session ended successfully")
+            except Exception as e:
+                await self.logs_manager.error(f"Session end failed: {str(e)}")
+                # Even if session end fails, we keep the stopped state
+                await self.logs_manager.info("Maintaining stopped state despite session end failure")
+                raise
+
+            # Update extension status
+            self._update_extension_status()
+            await self.logs_manager.info("Extension status updated")
+
+            # Log final statistics
+            await self.logs_manager.info(
+                f"Session summary - Runtime: {total_runtime}, "
+                f"Jobs Viewed: {self.get_statistics().get('jobs_viewed', 0)}, "
+                f"Applications: {self.get_statistics().get('jobs_applied', 0)}"
+            )
+
+        except Exception as e:
+            await self.logs_manager.error(f"Critical error in stop_automation: {str(e)}")
+            # Ensure consistent state
+            self._ensure_consistent_state()
+            raise
 
     def log_to_console(self, message: str, level: str = "INFO"):
         """Append a line to the mini console area with timestamp and log level."""
@@ -1319,6 +1620,15 @@ class MinimalGUI:
         }
         
         try:
+            # Log using LogsManager first
+            if level == "ERROR":
+                self.run_coroutine_in_background(self.logs_manager.error(message))
+            elif level == "WARNING":
+                self.run_coroutine_in_background(self.logs_manager.warning(message))
+            else:
+                self.run_coroutine_in_background(self.logs_manager.info(message))
+
+            # Also update GUI console
             self.console_text.tag_configure(level, foreground=level_colors.get(level, "black"))
             self.console_text.insert(tk.END, f"[{timestamp}] {level}: {message}\n", level)
             self.console_text.see(tk.END)  # auto-scroll to bottom
@@ -1327,59 +1637,93 @@ class MinimalGUI:
             if level == "ERROR":
                 self._update_extension_status()
         except Exception as e:
-            print(f"Failed to log to console: {e}")
-            print(f"Original message: [{timestamp}] {level}: {message}")
+            # If GUI logging fails, at least try to log through LogsManager
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to log to console: {e}. Original message: [{timestamp}] {level}: {message}")
+            )
 
-    def log_error(self, message: str):
-        """Log errors in console and in status.json with rate limiting."""
-        # Rate limit error logging
-        now = datetime.now()
-        if (self.last_error_time and 
-            (now - self.last_error_time).total_seconds() < 5 and 
-            self.error_count > 10):
-            # Too many errors too quickly, suppress
-            return
-            
-        self.last_error_time = now
-        self.error_count += 1
+    def log_error(self, message: str, context: dict = None):
+        """
+        Log errors with additional context information.
         
-        # Log to console
-        self.log_to_console(message, level="ERROR")
-        
-        # Update error log file
+        Args:
+            message (str): The error message
+            context (dict, optional): Additional context about the error
+        """
         try:
-            # Read existing data
-            data = {}
-            if self.extension_status_file.exists():
-                with open(self.extension_status_file, 'r') as f:
-                    data = json.load(f)
-
-            # Update errors list
-            if "errors" not in data:
-                data["errors"] = []
+            # Rate limit error logging
+            now = datetime.now()
+            if (self.state["last_error_time"] and 
+                (now - self.state["last_error_time"]).total_seconds() < 5 and 
+                self.state["error_count"] > 10):
+                # Too many errors too quickly, suppress
+                self.run_coroutine_in_background(
+                    self.logs_manager.warning("Error logging rate limit exceeded, suppressing errors")
+                )
+                return
+                
+            self.state["last_error_time"] = now
+            self.state["error_count"] += 1
             
-            # Add error with timestamp
-            error_entry = {
-                "timestamp": datetime.now().isoformat(),
-                "message": message
+            # Build error data with context
+            error_data = {
+                "timestamp": now.isoformat(),
+                "message": message,
+                "context": context or {},
+                "state": {
+                    "is_running": self.state["is_running"],
+                    "is_paused": self.state["is_paused"],
+                    "runtime": self._get_total_runtime(),
+                    "error_count": self.state["error_count"],
+                    "last_activity": self.state.get("last_activity"),
+                    "ui_state": {
+                        "status": self.status_var.get(),
+                        "current_activity": self.current_activity_var.get()
+                    }
+                }
             }
-            data["errors"].append(error_entry)
             
-            # Keep only last 100 errors
-            data["errors"] = data["errors"][-100:]
+            # Add stack trace for debugging
+            import traceback
+            error_data["stack_trace"] = traceback.format_exc()
+            
+            # Log to console and LogsManager
+            self.log_to_console(f"{message} (Context: {json.dumps(context) if context else 'None'})", level="ERROR")
+            
+            # Update error log file
+            try:
+                # Read existing data
+                data = {}
+                if self.extension_status_file.exists():
+                    with open(self.extension_status_file, 'r') as f:
+                        data = json.load(f)
 
-            # Ensure directory exists
-            self.extension_status_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Write updated data
-            with open(self.extension_status_file, 'w') as f:
-                json.dump(data, f, indent=2)
+                # Update errors list
+                if "errors" not in data:
+                    data["errors"] = []
+                
+                # Add error with full context
+                data["errors"].append(error_data)
+                
+                # Keep only last 100 errors
+                data["errors"] = data["errors"][-100:]
+
+                # Ensure directory exists
+                self.extension_status_file.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Write updated data
+                with open(self.extension_status_file, 'w') as f:
+                    json.dump(data, f, indent=2)
+                    
+            except Exception as e:
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Failed to write error to status file: {e}")
+                )
                 
         except Exception as e:
-            print(f"Failed to write error to status file: {e}")
-            self.log_to_console(
-                f"Failed to write error to status file: {e}", 
-                level="WARNING"
+            # Fallback error logging if everything else fails
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Meta-error in error logging: {str(e)}. Original error: {message}")
             )
 
     def _update_extension_status(self):
@@ -1387,14 +1731,14 @@ class MinimalGUI:
         try:
             # Get current status
             status = {
-                "is_running": self.is_running,
-                "is_paused": self.is_paused,
+                "is_running": self.state["is_running"],
+                "is_paused": self.state["is_paused"],
                 "status": self.status_var.get(),
                 "runtime": self.runtime_var.get(),
                 "last_update": datetime.now().isoformat(),
                 "errors": [],
                 "metrics": {
-                    "error_count": self.error_count,
+                    "error_count": self.state["error_count"],
                     "total_runtime": self._get_total_runtime()
                 }
             }
@@ -1406,9 +1750,13 @@ class MinimalGUI:
                     with open(self.extension_status_file, 'r') as f:
                         current_data = json.load(f)
                 except json.JSONDecodeError:
-                    self.log_to_console("Warning: Status file corrupted, creating new", level="WARNING")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.warning("Status file corrupted, creating new")
+                    )
                 except Exception as e:
-                    self.log_to_console(f"Warning: Could not read status file: {e}", level="WARNING")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.warning(f"Could not read status file: {e}")
+                    )
 
             # Preserve existing errors and merge new status
             if "errors" in current_data:
@@ -1425,65 +1773,116 @@ class MinimalGUI:
                 json.dump(current_data, f, indent=2)
 
         except Exception as e:
-            self.log_to_console(f"Error writing extension status: {str(e)}", level="WARNING")
+            self.run_coroutine_in_background(
+                self.logs_manager.warning(f"Error writing extension status: {str(e)}")
+            )
 
     def _get_total_runtime(self) -> float:
         """Calculate total runtime in seconds."""
-        if not self.start_time:
+        if not self.state["start_time"]:
             return 0.0
         
-        if self.is_paused:
-            return (self.pause_time - self.start_time).total_seconds()
+        if self.state["is_paused"]:
+            return (self.pause_time - self.state["start_time"]).total_seconds()
         
-        return (datetime.now() - self.start_time).total_seconds()
+        return (datetime.now() - self.state["start_time"]).total_seconds()
 
     def update_status_loop(self):
         """Update runtime, status, and statistics if running, every second."""
         try:
             if not hasattr(self, 'last_status_update'):
                 self.last_status_update = datetime.now()
+                self.run_coroutine_in_background(
+                    self.logs_manager.info("Initializing status update loop")
+                )
 
             current_time = datetime.now()
             
             # Check for auto-pause condition
-            self.check_auto_pause()
+            try:
+                self.check_auto_pause()
+            except Exception as auto_pause_error:
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Auto-pause check failed: {auto_pause_error}")
+                )
             
             # Validate running state
-            if self.is_running and self.start_time:
-                if not self.is_paused:
-                    runtime = current_time - self.start_time
-                    hours, remainder = divmod(runtime.seconds, 3600)
-                    minutes, seconds = divmod(remainder, 60)
-                    self.runtime_var.set(f"Runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
-                    
-                    # Update status file and refresh statistics every 5 seconds
-                    if (current_time - self.last_status_update).total_seconds() >= 5:
-                        self._update_extension_status()
-                        self.refresh_statistics()
-                        self.last_status_update = current_time
+            if self.state["is_running"] and self.state["start_time"]:
+                if not self.state["is_paused"]:
+                    try:
+                        runtime = current_time - self.state["start_time"]
+                        hours, remainder = divmod(runtime.seconds, 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        self.runtime_var.set(f"Runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
                         
-                    # Track long-running sessions
-                    if runtime.seconds > 0 and runtime.seconds % 3600 == 0:  # Every hour
+                        # Update status file and refresh statistics every 5 seconds
+                        if (current_time - self.last_status_update).total_seconds() >= 5:
+                            try:
+                                self._update_extension_status()
+                                self.run_coroutine_in_background(
+                                    self.logs_manager.info("Extension status updated successfully")
+                                )
+                            except Exception as status_error:
+                                self.run_coroutine_in_background(
+                                    self.logs_manager.error(f"Failed to update extension status: {status_error}")
+                                )
+                                
+                            try:
+                                self.refresh_statistics()
+                                self.run_coroutine_in_background(
+                                    self.logs_manager.info("Statistics refreshed successfully")
+                                )
+                            except Exception as stats_error:
+                                self.run_coroutine_in_background(
+                                    self.logs_manager.error(f"Failed to refresh statistics: {stats_error}")
+                                )
+                                
+                            self.last_status_update = current_time
+                            
+                        # Track long-running sessions
+                        if runtime.seconds > 0 and runtime.seconds % 3600 == 0:  # Every hour
+                            try:
+                                self.run_coroutine_in_background(
+                                    self._track_telemetry("session_milestone", {
+                                        "runtime_hours": hours,
+                                        "is_paused": self.state["is_paused"],
+                                        "total_runtime": self._get_total_runtime(),
+                                        "jobs_applied": self.get_statistics().get('jobs_applied', 0)
+                                    })
+                                )
+                                self.run_coroutine_in_background(
+                                    self.logs_manager.info(f"Session milestone tracked: {hours} hours")
+                                )
+                            except Exception as milestone_error:
+                                self.run_coroutine_in_background(
+                                    self.logs_manager.error(f"Failed to track session milestone: {milestone_error}")
+                                )
+                    except Exception as runtime_error:
                         self.run_coroutine_in_background(
-                            self._track_telemetry("session_milestone", {
-                                "runtime_hours": hours,
-                                "is_paused": self.is_paused,
-                                "total_runtime": self._get_total_runtime(),
-                                "jobs_applied": self.get_statistics().get('jobs_applied', 0)
-                            })
+                            self.logs_manager.error(f"Error updating runtime display: {runtime_error}")
                         )
 
         except Exception as e:
-            self.log_error(f"Error in status update: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Critical error in status update: {str(e)}")
+            )
             # Attempt to reset status if there's an error
             try:
                 self.runtime_var.set("Runtime: 00:00:00")
                 self.last_status_update = current_time
-            except Exception:
-                pass  # Ignore secondary errors in recovery
+                self.run_coroutine_in_background(
+                    self.logs_manager.info("Status display reset after error")
+                )
+            except Exception as reset_error:
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Failed to reset status after error: {reset_error}")
+                )
 
         # Schedule next update with error check
         if not self.window.winfo_exists():
+            self.run_coroutine_in_background(
+                self.logs_manager.warning("Window no longer exists, stopping status updates")
+            )
             return  # Stop updates if window is destroyed
         self.window.after(1000, self.update_status_loop)
 
@@ -1500,7 +1899,7 @@ class MinimalGUI:
         Clean shutdown of GUI.
         If the user closes the window or picks a different mode, we might do final cleanup.
         """
-        if self.is_running:
+        if self.state["is_running"]:
             self.run_coroutine_in_background(self.stop_automation())
         self.loop.call_soon_threadsafe(self.loop.stop)  # stop the loop
         self.window.destroy()
@@ -1563,10 +1962,14 @@ class MinimalGUI:
                 self._track_telemetry("settings_updated", settings)
             )
             
-            self.log_to_console("Settings saved successfully", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Settings saved successfully")
+            )
             
         except Exception as e:
-            self.log_error(f"Failed to save settings: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to save settings: {str(e)}")
+            )
 
     def load_settings(self) -> dict:
         """Load settings from file or return defaults."""
@@ -1587,21 +1990,26 @@ class MinimalGUI:
                 if hasattr(self, 'auto_pause_var'):
                     self.auto_pause_var.set(str(defaults['auto_pause_hours']))
                     
+                self.run_coroutine_in_background(
+                    self.logs_manager.info("Settings loaded successfully")
+                )
+                    
         except Exception as e:
-            self.log_to_console(f"Warning: Could not load settings: {e}", level="WARNING")
+            self.run_coroutine_in_background(
+                self.logs_manager.warning(f"Could not load settings: {e}")
+            )
             
         return defaults
 
     def check_auto_pause(self):
         """Check if we should auto-pause based on runtime."""
-        if self.is_running and not self.is_paused and self.start_time:
-            runtime_hours = (datetime.now() - self.start_time).total_seconds() / 3600
+        if self.state["is_running"] and not self.state["is_paused"] and self.state["start_time"]:
+            runtime_hours = (datetime.now() - self.state["start_time"]).total_seconds() / 3600
             auto_pause_hours = float(self.auto_pause_var.get())
             
             if runtime_hours >= auto_pause_hours:
-                self.log_to_console(
-                    f"Auto-pausing after {auto_pause_hours} hours of runtime",
-                    level="WARNING"
+                self.run_coroutine_in_background(
+                    self.logs_manager.warning(f"Auto-pausing after {auto_pause_hours} hours of runtime")
                 )
                 self.run_coroutine_in_background(self.pause_automation())
 
@@ -1634,7 +2042,9 @@ class MinimalGUI:
             # Update status and UI
             self.cv_status_var.set(f"CV loaded: {cv_path.name}")
             self.cv_remove_button.config(state=tk.NORMAL)
-            self.log_to_console(f"CV file selected: {cv_path.name}", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info(f"CV file selected: {cv_path.name}")
+            )
             
             # Preview the CV content
             self.preview_cv_content(cv_path)
@@ -1655,7 +2065,9 @@ class MinimalGUI:
             self.save_settings()
             
         except Exception as e:
-            self.log_error(f"Error selecting CV file: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error selecting CV file: {str(e)}")
+            )
             self.cv_status_var.set("Error loading CV file")
 
     def preview_cv_content(self, file_path: Path):
@@ -1683,9 +2095,14 @@ class MinimalGUI:
                 self.cv_preview_text.insert(tk.END, "...\n(Preview truncated)")
                 
             self.cv_preview_text.config(state=tk.DISABLED)
+            self.run_coroutine_in_background(
+                self.logs_manager.info(f"CV preview generated for {file_path.name}")
+            )
             
         except Exception as e:
-            self.log_error(f"Error previewing CV: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error previewing CV: {str(e)}")
+            )
             self.cv_preview_text.insert(tk.END, "Error loading preview")
             self.cv_preview_text.config(state=tk.DISABLED)
 
@@ -1694,60 +2111,65 @@ class MinimalGUI:
         try:
             # Get CVParserAgent instance from controller
             if not hasattr(self.controller, 'cv_parser'):
-                self.log_to_console("CV Parser not initialized", level="ERROR")
+                await self.logs_manager.error("CV Parser not initialized")
                 return
                 
             # Parse the CV
-            self.log_to_console("Parsing CV content...", level="INFO")
+            await self.logs_manager.info("Parsing CV content...")
             cv_data = await self.controller.cv_parser.parse_cv(file_path)
             
             if cv_data:
-                self.log_to_console("CV parsed successfully", level="INFO")
+                await self.logs_manager.info("CV parsed successfully")
                 # Store parsed data in controller's settings
                 self.controller.settings['parsed_cv_data'] = cv_data.dict()
                 self.save_settings()
             else:
-                self.log_to_console("No data extracted from CV", level="WARNING")
+                await self.logs_manager.warning("No data extracted from CV")
                 
         except Exception as e:
-            self.log_error(f"Error parsing CV: {str(e)}")
+            await self.logs_manager.error(f"Error parsing CV: {str(e)}")
+            raise
 
     def validate_cv_file(self, file_path: Path) -> bool:
         """Validate the selected CV file with enhanced checks."""
         try:
             # Check if file exists
             if not file_path.exists():
-                self.log_to_console("Selected file does not exist", level="ERROR")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error("Selected file does not exist")
+                )
                 return False
                 
             # Check file size (5MB limit)
             max_size = 5 * 1024 * 1024  # 5MB in bytes
             if file_path.stat().st_size > max_size:
-                self.log_to_console(
-                    "File too large. Maximum size is 5MB",
-                    level="ERROR"
+                self.run_coroutine_in_background(
+                    self.logs_manager.error("File too large. Maximum size is 5MB")
                 )
                 return False
                 
             # Check file format
             valid_formats = {'.pdf', '.docx', '.txt'}
             if file_path.suffix.lower() not in valid_formats:
-                self.log_to_console(
-                    f"Unsupported file format. Please use: {', '.join(valid_formats)}",
-                    level="ERROR"
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Unsupported file format. Please use: {', '.join(valid_formats)}")
                 )
                 return False
                 
             # Additional validation checks
             if file_path.stat().st_size == 0:
-                self.log_to_console("File is empty", level="ERROR")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error("File is empty")
+                )
                 return False
                 
             # Check if file is readable
             try:
                 file_path.open('rb').close()
             except Exception:
-                self.log_to_console("File is not readable", level="ERROR")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error("File is not readable")
+                )
                 return False
                 
             # For PDF files, check if it's a valid PDF
@@ -1756,13 +2178,17 @@ class MinimalGUI:
                     with open(file_path, 'rb') as f:
                         PyPDF2.PdfReader(f)
                 except Exception:
-                    self.log_to_console("Invalid PDF file", level="ERROR")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error("Invalid PDF file")
+                    )
                     return False
                     
             return True
             
         except Exception as e:
-            self.log_error(f"Error validating CV file: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error validating CV file: {str(e)}")
+            )
             return False
 
     def remove_cv_file(self):
@@ -1773,7 +2199,9 @@ class MinimalGUI:
             
             # Update status
             self.cv_status_var.set("No CV uploaded")
-            self.log_to_console("CV file removed", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info("CV file removed")
+            )
             
             # Track the event
             self.run_coroutine_in_background(
@@ -1784,7 +2212,9 @@ class MinimalGUI:
             self.save_settings()
             
         except Exception as e:
-            self.log_error(f"Error removing CV file: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error removing CV file: {str(e)}")
+            )
             self.cv_status_var.set("Error removing CV file")
 
     def apply_activity_filter(self, event=None):
@@ -1842,7 +2272,9 @@ class MinimalGUI:
                         to_date = datetime.strptime(self.to_date_var.get(), "%Y-%m-%d %H:%M")
                         date_range = (from_date, to_date)
                     except ValueError:
-                        self.log_to_console("Invalid date format in range", level="WARNING")
+                        self.run_coroutine_in_background(
+                            self.logs_manager.error("Invalid date format in range")
+                        )
             
             # Split content into lines and filter
             lines = self._activity_content.splitlines()
@@ -1904,7 +2336,9 @@ class MinimalGUI:
             )
             
         except Exception as e:
-            self.log_error(f"Error applying activity filter: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error applying activity filter: {str(e)}")
+            )
 
     def _get_tag_indicators(self, tag: str) -> list:
         """Get text indicators for a specific tag."""
@@ -1959,10 +2393,14 @@ class MinimalGUI:
                 
                 # Update status
                 total_count = len([l for l in lines if l.strip()])
-                self.log_to_console(f"Showing all {total_count} events", level="INFO")
+                self.run_coroutine_in_background(
+                    self.logs_manager.info(f"Showing all {total_count} events")
+                )
                 
         except Exception as e:
-            self.log_error(f"Error clearing activity filters: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error clearing activity filters: {str(e)}")
+            )
 
     def refresh_statistics(self):
         """Refresh statistics and update the UI."""
@@ -1982,13 +2420,16 @@ class MinimalGUI:
                 success_rate = (stats.get('jobs_applied', 0) / total_attempts) * 100
                 self.success_rate_var.set(f"{success_rate:.1f}%")
                 self.success_progress['value'] = success_rate
+                self.run_coroutine_in_background(
+                    self.logs_manager.info(f"Current success rate: {success_rate:.1f}%")
+                )
             else:
                 self.success_rate_var.set("0%")
                 self.success_progress['value'] = 0
             
             # Update session information
-            if self.start_time:
-                total_runtime = datetime.now() - self.start_time
+            if self.state["start_time"]:
+                total_runtime = datetime.now() - self.state["start_time"]
                 hours = total_runtime.seconds // 3600
                 minutes = (total_runtime.seconds % 3600) // 60
                 seconds = total_runtime.seconds % 60
@@ -2004,12 +2445,9 @@ class MinimalGUI:
                     self.avg_time_per_app_var.set(
                         f"⌛ Avg. Time per Application: {avg_minutes:02d}:{avg_seconds:02d}"
                     )
-            
-            # Update last activity
-            if hasattr(self, 'current_activity_var'):
-                self.last_activity_var.set(
-                    f"📝 Last Activity: {self.current_activity_var.get().replace('Current: ', '')}"
-                )
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info(f"Average time per application: {avg_minutes:02d}:{avg_seconds:02d}")
+                    )
             
             # Track refresh event
             self.run_coroutine_in_background(
@@ -2021,7 +2459,9 @@ class MinimalGUI:
             )
             
         except Exception as e:
-            self.log_error(f"Error refreshing statistics: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error refreshing statistics: {str(e)}")
+            )
 
     def update_statistics(self, event_type: str, data: dict = None):
         """Update statistics based on events."""
@@ -2037,18 +2477,32 @@ class MinimalGUI:
             # Update relevant statistics based on event type
             if event_type == "job_viewed":
                 self._statistics['jobs_viewed'] += 1
+                self.run_coroutine_in_background(
+                    self.logs_manager.info(f"New job viewed. Total: {self._statistics['jobs_viewed']}")
+                )
             elif event_type == "job_matched":
                 self._statistics['jobs_matched'] += 1
+                self.run_coroutine_in_background(
+                    self.logs_manager.info(f"New job matched. Total: {self._statistics['jobs_matched']}")
+                )
             elif event_type == "job_applied":
                 self._statistics['jobs_applied'] += 1
+                self.run_coroutine_in_background(
+                    self.logs_manager.info(f"New job application submitted. Total: {self._statistics['jobs_applied']}")
+                )
             elif event_type == "job_failed":
                 self._statistics['jobs_failed'] += 1
+                self.run_coroutine_in_background(
+                    self.logs_manager.warning(f"Job application failed. Total failures: {self._statistics['jobs_failed']}")
+                )
             
             # Refresh the statistics display
             self.refresh_statistics()
             
         except Exception as e:
-            self.log_error(f"Error updating statistics: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error updating statistics: {str(e)}")
+            )
 
     def get_statistics(self) -> dict:
         """Get current statistics."""
@@ -2102,10 +2556,14 @@ class MinimalGUI:
                 for category, value in stats['detailed_stats'].items():
                     writer.writerow([category, value])
             
-            self.log_to_console(f"Statistics exported to {filename}", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info(f"Statistics exported to {filename}")
+            )
             
         except Exception as e:
-            self.log_error(f"Error exporting statistics: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error exporting statistics: {str(e)}")
+            )
 
     def get_detailed_statistics(self) -> dict:
         """Get detailed statistics including daily and overall metrics."""
@@ -2141,8 +2599,8 @@ class MinimalGUI:
             # Get runtime information
             total_runtime = "00:00:00"
             avg_time_per_app = "00:00"
-            if self.start_time:
-                runtime = datetime.now() - self.start_time
+            if self.state["start_time"]:
+                runtime = datetime.now() - self.state["start_time"]
                 hours = runtime.seconds // 3600
                 minutes = (runtime.seconds % 3600) // 60
                 seconds = runtime.seconds % 60
@@ -2169,10 +2627,10 @@ class MinimalGUI:
                     'Successful Applications Today': self._daily_stats['jobs_applied'],
                     'Failed Applications Today': self._daily_stats['jobs_failed'],
                     'Average Processing Time': avg_time_per_app,
-                    'Session Start Time': self.start_time.strftime('%H:%M:%S') if self.start_time else 'Not Started',
+                    'Session Start Time': self.state["start_time"].strftime('%H:%M:%S') if self.state["start_time"] else 'Not Started',
                     'Total Pauses': getattr(self, 'pause_count', 0),
                     'Last Error': getattr(self, 'last_error_time', 'None'),
-                    'Error Count': self.error_count
+                    'Error Count': self.state["error_count"]
                 }
             }
             
@@ -2184,117 +2642,365 @@ class MinimalGUI:
         """Verify all GUI components are working properly."""
         status = {
             "components": {},
-            "errors": []
+            "errors": [],
+            "warnings": []
         }
         
         try:
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Starting component verification")
+            )
+            
             # Verify main window
-            status["components"]["main_window"] = {
-                "exists": bool(self.window),
-                "title": self.window.title(),
-                "geometry": self.window.geometry()
-            }
+            try:
+                status["components"]["main_window"] = {
+                    "exists": bool(self.window),
+                    "title": self.window.title(),
+                    "geometry": self.window.geometry()
+                }
+                if not status["components"]["main_window"]["exists"]:
+                    status["errors"].append("Main window does not exist")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error("Main window verification failed: window does not exist")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("Main window verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Main window verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Main window verification failed: {str(e)}")
+                )
             
             # Verify tabs
-            status["components"]["tabs"] = {
-                "console_tab": bool(self.console_tab),
-                "settings_tab": bool(self.settings_tab),
-                "stats_tab": bool(self.stats_tab)
-            }
+            try:
+                status["components"]["tabs"] = {
+                    "console_tab": bool(self.console_tab),
+                    "settings_tab": bool(self.settings_tab),
+                    "stats_tab": bool(self.stats_tab)
+                }
+                missing_tabs = [tab for tab, exists in status["components"]["tabs"].items() if not exists]
+                if missing_tabs:
+                    status["errors"].append(f"Missing tabs: {', '.join(missing_tabs)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"Tab verification failed: missing {', '.join(missing_tabs)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("All tabs verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Tab verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Tab verification failed: {str(e)}")
+                )
             
             # Verify control buttons
-            status["components"]["controls"] = {
-                "start_button": {
-                    "exists": bool(self.start_button),
-                    "state": self.start_button.cget("state")
-                },
-                "pause_button": {
-                    "exists": bool(self.pause_button),
-                    "state": self.pause_button.cget("state")
-                },
-                "stop_button": {
-                    "exists": bool(self.stop_button),
-                    "state": self.stop_button.cget("state")
+            try:
+                status["components"]["controls"] = {
+                    "start_button": {
+                        "exists": bool(self.start_button),
+                        "state": self.start_button.cget("state")
+                    },
+                    "pause_button": {
+                        "exists": bool(self.pause_button),
+                        "state": self.pause_button.cget("state")
+                    },
+                    "stop_button": {
+                        "exists": bool(self.stop_button),
+                        "state": self.stop_button.cget("state")
+                    }
                 }
-            }
+                
+                # Check button states for consistency
+                if self.state["is_running"]:
+                    if status["components"]["controls"]["start_button"]["state"] != "disabled":
+                        status["warnings"].append("Start button should be disabled while running")
+                        self.run_coroutine_in_background(
+                            self.logs_manager.warning("Button state inconsistency: start button should be disabled while running")
+                        )
+                else:
+                    if status["components"]["controls"]["pause_button"]["state"] != "disabled":
+                        status["warnings"].append("Pause button should be disabled while not running")
+                        self.run_coroutine_in_background(
+                            self.logs_manager.warning("Button state inconsistency: pause button should be disabled while not running")
+                        )
+                
+                missing_buttons = [btn for btn, data in status["components"]["controls"].items() 
+                                 if not data["exists"]]
+                if missing_buttons:
+                    status["errors"].append(f"Missing buttons: {', '.join(missing_buttons)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"Button verification failed: missing {', '.join(missing_buttons)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("All control buttons verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Control button verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Control button verification failed: {str(e)}")
+                )
             
             # Verify activity monitor
-            status["components"]["activity_monitor"] = {
-                "text_widget": bool(self.activity_text),
-                "filter_controls": {
-                    "type_filter": bool(self.filter_var),
-                    "agent_filter": bool(self.agent_filter_var),
-                    "time_filter": bool(self.time_filter_var),
-                    "search": bool(self.search_var)
+            try:
+                status["components"]["activity_monitor"] = {
+                    "text_widget": bool(self.activity_text),
+                    "filter_controls": {
+                        "type_filter": bool(self.filter_var),
+                        "agent_filter": bool(self.agent_filter_var),
+                        "time_filter": bool(self.time_filter_var),
+                        "search": bool(self.search_var)
+                    }
                 }
-            }
-            
+                
+                if not status["components"]["activity_monitor"]["text_widget"]:
+                    status["errors"].append("Activity text widget missing")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error("Activity monitor verification failed: text widget missing")
+                    )
+                
+                missing_filters = [filter for filter, exists in 
+                                 status["components"]["activity_monitor"]["filter_controls"].items() 
+                                 if not exists]
+                if missing_filters:
+                    status["errors"].append(f"Missing filters: {', '.join(missing_filters)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"Filter verification failed: missing {', '.join(missing_filters)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("Activity monitor and filters verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Activity monitor verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Activity monitor verification failed: {str(e)}")
+                )
+
             # Verify statistics
-            status["components"]["statistics"] = {
-                "jobs_viewed": bool(self.jobs_viewed_var),
-                "jobs_matched": bool(self.jobs_matched_var),
-                "jobs_applied": bool(self.jobs_applied_var),
-                "jobs_failed": bool(self.jobs_failed_var),
-                "success_rate": bool(self.success_rate_var),
-                "progress_bar": bool(self.success_progress)
-            }
+            try:
+                status["components"]["statistics"] = {
+                    "jobs_viewed": bool(self.jobs_viewed_var),
+                    "jobs_matched": bool(self.jobs_matched_var),
+                    "jobs_applied": bool(self.jobs_applied_var),
+                    "jobs_failed": bool(self.jobs_failed_var),
+                    "success_rate": bool(self.success_rate_var),
+                    "progress_bar": bool(self.success_progress)
+                }
+                
+                missing_stats = [stat for stat, exists in status["components"]["statistics"].items() 
+                               if not exists]
+                if missing_stats:
+                    status["errors"].append(f"Missing statistics components: {', '.join(missing_stats)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"Statistics verification failed: missing {', '.join(missing_stats)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("Statistics components verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Statistics verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Statistics verification failed: {str(e)}")
+                )
             
             # Verify CV upload
-            status["components"]["cv_upload"] = {
-                "status_var": bool(self.cv_status_var),
-                "upload_button": bool(self.cv_upload_button),
-                "remove_button": bool(self.cv_remove_button),
-                "preview": bool(self.cv_preview_text)
-            }
+            try:
+                status["components"]["cv_upload"] = {
+                    "status_var": bool(self.cv_status_var),
+                    "upload_button": bool(self.cv_upload_button),
+                    "remove_button": bool(self.cv_remove_button),
+                    "preview": bool(self.cv_preview_text)
+                }
+                
+                missing_cv_components = [comp for comp, exists in status["components"]["cv_upload"].items() 
+                                      if not exists]
+                if missing_cv_components:
+                    status["errors"].append(f"Missing CV upload components: {', '.join(missing_cv_components)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"CV upload verification failed: missing {', '.join(missing_cv_components)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("CV upload components verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"CV upload verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"CV upload verification failed: {str(e)}")
+                )
             
             # Verify settings
-            status["components"]["settings"] = {
-                "delay_var": bool(self.delay_var),
-                "auto_pause_var": bool(self.auto_pause_var),
-                "save_button": bool(self.save_settings_button)
-            }
+            try:
+                status["components"]["settings"] = {
+                    "delay_var": bool(self.delay_var),
+                    "auto_pause_var": bool(self.auto_pause_var),
+                    "save_button": bool(self.save_settings_button)
+                }
+                
+                missing_settings = [setting for setting, exists in status["components"]["settings"].items() 
+                                 if not exists]
+                if missing_settings:
+                    status["errors"].append(f"Missing settings components: {', '.join(missing_settings)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"Settings verification failed: missing {', '.join(missing_settings)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("Settings components verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Settings verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Settings verification failed: {str(e)}")
+                )
             
             # Verify calendar functionality
-            status["components"]["calendar"] = {
-                "available": bool(Calendar),
-                "date_range_frame": bool(self.date_range_frame),
-                "from_date": bool(self.from_date_var),
-                "to_date": bool(self.to_date_var)
-            }
+            try:
+                status["components"]["calendar"] = {
+                    "available": bool(Calendar),
+                    "date_range_frame": bool(self.date_range_frame),
+                    "from_date": bool(self.from_date_var),
+                    "to_date": bool(self.to_date_var)
+                }
+                
+                if not status["components"]["calendar"]["available"]:
+                    status["warnings"].append("Calendar functionality not available")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.warning("Calendar functionality not available - limited date selection")
+                    )
+                
+                missing_calendar = [comp for comp, exists in status["components"]["calendar"].items() 
+                                 if not exists and comp != "available"]
+                if missing_calendar:
+                    status["errors"].append(f"Missing calendar components: {', '.join(missing_calendar)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"Calendar verification failed: missing {', '.join(missing_calendar)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("Calendar components verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Calendar verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Calendar verification failed: {str(e)}")
+                )
             
             # Test event handlers
-            status["event_handlers"] = {
-                "start_automation": bool(self.start_automation_command),
-                "pause_automation": bool(self.pause_automation_command),
-                "stop_automation": bool(self.stop_automation_command),
-                "save_settings": bool(self.save_settings),
-                "export_statistics": bool(self.export_statistics),
-                "apply_filters": bool(self.apply_activity_filter)
-            }
+            try:
+                status["event_handlers"] = {
+                    "start_automation": bool(self.start_automation),
+                    "pause_automation": bool(self.pause_automation),
+                    "stop_automation": bool(self.stop_automation),
+                    "save_settings": bool(self.save_settings),
+                    "export_statistics": bool(self.export_statistics),
+                    "apply_filters": bool(self.apply_activity_filter)
+                }
+                
+                missing_handlers = [handler for handler, exists in status["event_handlers"].items() 
+                                 if not exists]
+                if missing_handlers:
+                    status["errors"].append(f"Missing event handlers: {', '.join(missing_handlers)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"Event handler verification failed: missing {', '.join(missing_handlers)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("Event handlers verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Event handler verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Event handler verification failed: {str(e)}")
+                )
             
             # Test file operations
-            status["file_operations"] = {
-                "settings_file": self.settings_file.exists(),
-                "status_file": self.extension_status_file.exists(),
-                "settings_writable": os.access(self.settings_file.parent, os.W_OK),
-                "status_writable": os.access(self.extension_status_file.parent, os.W_OK)
-            }
+            try:
+                status["file_operations"] = {
+                    "settings_file": self.settings_file.exists(),
+                    "status_file": self.extension_status_file.exists(),
+                    "settings_writable": os.access(self.settings_file.parent, os.W_OK),
+                    "status_writable": os.access(self.extension_status_file.parent, os.W_OK)
+                }
+                
+                file_issues = []
+                if not status["file_operations"]["settings_file"]:
+                    file_issues.append("settings file missing")
+                if not status["file_operations"]["status_file"]:
+                    file_issues.append("status file missing")
+                if not status["file_operations"]["settings_writable"]:
+                    file_issues.append("settings directory not writable")
+                if not status["file_operations"]["status_writable"]:
+                    file_issues.append("status directory not writable")
+                
+                if file_issues:
+                    status["errors"].append(f"File operation issues: {', '.join(file_issues)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(f"File operations verification failed: {', '.join(file_issues)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("File operations verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"File operations verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"File operations verification failed: {str(e)}")
+                )
             
             # Verify telemetry
-            status["telemetry"] = {
-                "initialized": bool(self.telemetry),
-                "event_loop": bool(self.loop and self.loop.is_running())
-            }
+            try:
+                status["telemetry"] = {
+                    "initialized": bool(self.telemetry),
+                    "event_loop": bool(self.loop and self.loop.is_running())
+                }
+                
+                telemetry_issues = []
+                if not status["telemetry"]["initialized"]:
+                    telemetry_issues.append("telemetry not initialized")
+                if not status["telemetry"]["event_loop"]:
+                    telemetry_issues.append("event loop not running")
+                
+                if telemetry_issues:
+                    status["warnings"].append(f"Telemetry issues: {', '.join(telemetry_issues)}")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.warning(f"Telemetry verification issues: {', '.join(telemetry_issues)}")
+                    )
+                else:
+                    self.run_coroutine_in_background(
+                        self.logs_manager.info("Telemetry verified successfully")
+                    )
+            except Exception as e:
+                status["errors"].append(f"Telemetry verification error: {str(e)}")
+                self.run_coroutine_in_background(
+                    self.logs_manager.error(f"Telemetry verification failed: {str(e)}")
+                )
             
-            # Log verification results
-            self.log_to_console("Component verification completed", level="INFO")
-            if not all(all(v.values()) for v in status["components"].values()):
-                self.log_to_console("Some components failed verification", level="WARNING")
+            # Log verification summary
+            error_count = len(status["errors"])
+            warning_count = len(status["warnings"])
+            if error_count > 0 or warning_count > 0:
+                self.run_coroutine_in_background(
+                    self.logs_manager.warning(
+                        f"Component verification completed with {error_count} errors and {warning_count} warnings"
+                    )
+                )
+            else:
+                self.run_coroutine_in_background(
+                    self.logs_manager.info("All components verified successfully")
+                )
                 
         except Exception as e:
-            error_msg = f"Error during component verification: {str(e)}"
+            error_msg = f"Critical error during component verification: {str(e)}"
             status["errors"].append(error_msg)
-            self.log_error(error_msg)
+            self.run_coroutine_in_background(
+                self.logs_manager.error(error_msg)
+            )
             
         return status
 
@@ -2302,7 +3008,9 @@ class MinimalGUI:
         """Run a test of all major components."""
         try:
             # Test activity logging
-            self.log_to_console("Testing activity logging...", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Testing activity logging...")
+            )
             for activity_type, config in ACTIVITY_TYPES.items():
                 self.update_ai_activity(
                     activity_type,
@@ -2311,7 +3019,9 @@ class MinimalGUI:
                 )
             
             # Test statistics
-            self.log_to_console("Testing statistics...", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Testing statistics...")
+            )
             test_stats = {
                 'jobs_viewed': 10,
                 'jobs_matched': 7,
@@ -2322,13 +3032,17 @@ class MinimalGUI:
             self.refresh_statistics()
             
             # Test filters
-            self.log_to_console("Testing filters...", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Testing filters...")
+            )
             self.filter_var.set("AI Core")
             self.apply_activity_filter()
             self.filter_var.set("ALL")
             
             # Test date range
-            self.log_to_console("Testing date range...", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Testing date range...")
+            )
             now = datetime.now()
             self.from_date_var.set((now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M"))
             self.to_date_var.set(now.strftime("%Y-%m-%d %H:%M"))
@@ -2338,15 +3052,21 @@ class MinimalGUI:
             status = self.verify_components()
             
             # Log results
-            self.log_to_console("Component test completed", level="INFO")
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Component test completed")
+            )
             if status["errors"]:
                 for error in status["errors"]:
-                    self.log_to_console(error, level="ERROR")
+                    self.run_coroutine_in_background(
+                        self.logs_manager.error(error)
+                    )
             
             return status
             
         except Exception as e:
-            self.log_error(f"Error during component test: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error during component test: {str(e)}")
+            )
             return {"error": str(e)}
 
     def send_message(self, event=None):
@@ -2369,11 +3089,18 @@ class MinimalGUI:
             self.chat_history.see(tk.END)
             self.chat_history.config(state=tk.DISABLED)
 
+            # Log the user message
+            self.run_coroutine_in_background(
+                self.logs_manager.info(f"User message sent: {message}")
+            )
+
             # Process message asynchronously
             self.run_coroutine_in_background(self.process_message(message))
 
         except Exception as e:
-            self.log_error(f"Error sending message: {str(e)}")
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Error sending message: {str(e)}")
+            )
 
     async def process_message(self, message: str):
         """Process a chat message and generate a response."""
@@ -2384,6 +3111,8 @@ class MinimalGUI:
             self.chat_history.see(tk.END)
             self.chat_history.config(state=tk.DISABLED)
 
+            await self.logs_manager.info("Processing user message...")
+
             # Get response from AI module through controller
             response = await self.controller.process_chat_message(message)
 
@@ -2391,6 +3120,7 @@ class MinimalGUI:
             if hasattr(self.controller, 'ai_module'):
                 model_info = self.controller.ai_module.get_model_info()
                 self.model_info_var.set(f"Model: {model_info}")
+                await self.logs_manager.info(f"Using AI model: {model_info}")
 
             # Remove loading indicator and add response
             self.chat_history.config(state=tk.NORMAL)
@@ -2403,6 +3133,8 @@ class MinimalGUI:
             self.chat_history.see(tk.END)
             self.chat_history.config(state=tk.DISABLED)
 
+            await self.logs_manager.info("AI response generated and displayed")
+
             # Track chat interaction
             await self._track_telemetry("chat_interaction", {
                 "message_length": len(message),
@@ -2411,12 +3143,474 @@ class MinimalGUI:
             })
 
         except Exception as e:
-            self.log_error(f"Error processing message: {str(e)}")
+            await self.logs_manager.error(f"Error processing message: {str(e)}")
             self.chat_history.config(state=tk.NORMAL)
             self.chat_history.delete("end-2c linestart", tk.END)
             self.chat_history.insert(tk.END, "❌ Error: Failed to process message\n", "error")
             self.chat_history.see(tk.END)
             self.chat_history.config(state=tk.DISABLED)
+
+    def _ensure_consistent_state(self):
+        """Ensure GUI state is consistent after errors."""
+        try:
+            # Log attempt
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Attempting to ensure consistent state after error")
+            )
+
+            # If we're not running, ensure everything is in stopped state
+            if not self.state["is_running"]:
+                self.start_button.config(state=tk.NORMAL)
+                self.pause_button.config(state=tk.DISABLED, text="Pause")
+                self.stop_button.config(state=tk.DISABLED)
+                self.status_var.set("Stopped")
+                self.status_label.config(foreground="red")
+                self.state["is_paused"] = False
+                self.state["start_time"] = None
+
+            # If we are running but paused
+            elif self.state["is_running"] and self.state["is_paused"]:
+                self.start_button.config(state=tk.DISABLED)
+                self.pause_button.config(state=tk.NORMAL, text="Resume")
+                self.stop_button.config(state=tk.NORMAL)
+                self.status_var.set("Paused")
+                self.status_label.config(foreground="orange")
+
+            # If we are running and not paused
+            elif self.state["is_running"] and not self.state["is_paused"]:
+                self.start_button.config(state=tk.DISABLED)
+                self.pause_button.config(state=tk.NORMAL, text="Pause")
+                self.stop_button.config(state=tk.NORMAL)
+                self.status_var.set("Running")
+                self.status_label.config(foreground="green")
+
+            # Update extension status
+            self._update_extension_status()
+            
+            self.run_coroutine_in_background(
+                self.logs_manager.info(
+                    f"State consistency ensured - Running={self.state['is_running']}, "
+                    f"Paused={self.state['is_paused']}, Status={self.status_var.get()}"
+                )
+            )
+
+        except Exception as e:
+            # If we fail to ensure consistent state, log it but don't raise
+            # as this is our last resort error handler
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to ensure consistent state: {str(e)}")
+            )
+
+    async def _log_state_transition(self, from_state: dict, to_state: dict, trigger: str):
+        """
+        Log detailed state transitions.
+        
+        Args:
+            from_state (dict): Previous state
+            to_state (dict): New state
+            trigger (str): What triggered the state change
+        """
+        try:
+            transition_data = {
+                "timestamp": datetime.now().isoformat(),
+                "trigger": trigger,
+                "from_state": from_state,
+                "to_state": to_state,
+                "changes": {
+                    k: to_state[k] for k in to_state 
+                    if k in from_state and to_state[k] != from_state[k]
+                },
+                "ui_state": {
+                    "status": self.status_var.get(),
+                    "current_activity": self.current_activity_var.get(),
+                    "runtime": self.runtime_var.get()
+                }
+            }
+            
+            # Log the transition
+            await self.logs_manager.info(
+                f"State transition: {json.dumps(transition_data, default=str)}"
+            )
+            
+            # Track significant state changes
+            if transition_data["changes"]:
+                await self._track_telemetry("state_change", transition_data)
+                
+            # Update last state change timestamp
+            self.state["last_state_change"] = transition_data["timestamp"]
+            
+        except Exception as e:
+            await self.logs_manager.error(
+                f"Failed to log state transition: {str(e)}",
+                context={
+                    "trigger": trigger,
+                    "from_state": str(from_state),
+                    "to_state": str(to_state)
+                }
+            )
+
+    async def _update_state(self, updates: dict, trigger: str):
+        """
+        Update state with logging.
+        
+        Args:
+            updates (dict): State updates to apply
+            trigger (str): What triggered the update
+        """
+        try:
+            # Store previous state
+            previous_state = self.state.copy()
+            
+            # Apply updates
+            self.state.update(updates)
+            
+            # Log the transition
+            await self._log_state_transition(
+                from_state=previous_state,
+                to_state=self.state,
+                trigger=trigger
+            )
+            
+        except Exception as e:
+            await self.logs_manager.error(
+                f"Failed to update state: {str(e)}",
+                context={
+                    "trigger": trigger,
+                    "updates": updates
+                }
+            )
+
+    async def _check_component_health(self):
+        """Periodic health check of critical components."""
+        try:
+            health_status = {
+                "event_loop": {
+                    "running": bool(self.loop and self.loop.is_running()),
+                    "tasks": len(asyncio.all_tasks(self.loop)) if self.loop else 0,
+                    "thread_alive": self.background_thread.is_alive() if self.background_thread else False
+                },
+                "logs_manager": {
+                    "initialized": bool(self.logs_manager),
+                    "error_count": self.state["error_count"],
+                    "log_level": getattr(self.logs_manager, 'log_level', None)
+                },
+                "telemetry": {
+                    "initialized": bool(self.telemetry),
+                    "last_ping": getattr(self.telemetry, 'last_ping', None)
+                },
+                "ui": {
+                    "window_exists": bool(self.window.winfo_exists()),
+                    "components": await self._get_ui_component_status()
+                },
+                "initialization": self.initialization_state,
+                "memory_usage": self._get_memory_usage()
+            }
+            
+            # Log health status
+            await self.logs_manager.info(f"Component health check: {json.dumps(health_status, default=str)}")
+            
+            # Analyze and track issues
+            issues = self._analyze_health_status(health_status)
+            if issues:
+                await self.logs_manager.warning(
+                    f"Health check issues detected: {json.dumps(issues)}",
+                    context={"health_status": health_status}
+                )
+                
+                # Track issues in telemetry
+                await self._track_telemetry("health_issues", {
+                    "issues": issues,
+                    "component_status": health_status
+                })
+                
+            return health_status
+            
+        except Exception as e:
+            await self.logs_manager.error(
+                f"Failed to perform health check: {str(e)}",
+                context={"last_known_state": self.state}
+            )
+            return None
+
+    async def _get_ui_component_status(self) -> dict:
+        """Get status of UI components."""
+        try:
+            return {
+                "tabs": {
+                    "console": bool(self.console_tab),
+                    "settings": bool(self.settings_tab),
+                    "stats": bool(self.stats_tab),
+                    "chat": bool(self.chat_tab)
+                },
+                "buttons": {
+                    "start": {
+                        "exists": bool(self.start_button),
+                        "state": self.start_button.cget("state")
+                    },
+                    "pause": {
+                        "exists": bool(self.pause_button),
+                        "state": self.pause_button.cget("state")
+                    },
+                    "stop": {
+                        "exists": bool(self.stop_button),
+                        "state": self.stop_button.cget("state")
+                    }
+                },
+                "displays": {
+                    "status": bool(self.status_var),
+                    "runtime": bool(self.runtime_var),
+                    "activity": bool(self.current_activity_var)
+                },
+                "console": {
+                    "text_widget": bool(self.console_text),
+                    "activity_text": bool(self.activity_text)
+                }
+            }
+        except Exception as e:
+            await self.logs_manager.error(f"Failed to get UI component status: {str(e)}")
+            return {}
+
+    def _get_memory_usage(self) -> dict:
+        """Get memory usage information."""
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            
+            return {
+                "rss": memory_info.rss,  # Resident Set Size
+                "vms": memory_info.vms,  # Virtual Memory Size
+                "percent": process.memory_percent(),
+                "unit": "bytes"
+            }
+        except Exception as e:
+            self.run_coroutine_in_background(
+                self.logs_manager.warning(f"Failed to get memory usage: {str(e)}")
+            )
+            return {}
+
+    def _analyze_health_status(self, status: dict) -> list:
+        """Analyze health status and return list of issues."""
+        issues = []
+        
+        try:
+            # Check event loop
+            if not status["event_loop"]["running"]:
+                issues.append("Event loop not running")
+            if not status["event_loop"]["thread_alive"]:
+                issues.append("Background thread not alive")
+            
+            # Check logs manager
+            if not status["logs_manager"]["initialized"]:
+                issues.append("Logs manager not initialized")
+            if status["logs_manager"]["error_count"] > 100:
+                issues.append(f"High error count: {status['logs_manager']['error_count']}")
+            
+            # Check telemetry
+            if not status["telemetry"]["initialized"]:
+                issues.append("Telemetry not initialized")
+            
+            # Check UI
+            if not status["ui"]["window_exists"]:
+                issues.append("Main window not exists")
+            
+            ui_components = status["ui"]["components"]
+            for tab, exists in ui_components["tabs"].items():
+                if not exists:
+                    issues.append(f"Missing {tab} tab")
+            
+            for button, info in ui_components["buttons"].items():
+                if not info["exists"]:
+                    issues.append(f"Missing {button} button")
+            
+            # Check initialization
+            for component, initialized in status["initialization"].items():
+                if not initialized:
+                    issues.append(f"{component} not initialized")
+            
+            # Check memory usage
+            if status["memory_usage"].get("percent", 0) > 80:
+                issues.append("High memory usage")
+            
+        except Exception as e:
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to analyze health status: {str(e)}")
+            )
+        
+        return issues
+
+    def start_health_check_loop(self):
+        """Start periodic health checks."""
+        async def health_check_loop():
+            while True:
+                try:
+                    await self._check_component_health()
+                    await asyncio.sleep(60)  # Check every minute
+                except Exception as e:
+                    await self.logs_manager.error(f"Health check loop error: {str(e)}")
+                    await asyncio.sleep(5)  # Short delay on error
+        
+        self.run_coroutine_in_background(health_check_loop())
+
+    def set_debug_mode(self, enabled: bool):
+        """
+        Enable or disable debug mode for additional logging.
+        
+        Args:
+            enabled (bool): Whether to enable debug mode
+        """
+        try:
+            self.debug_mode = enabled
+            self.run_coroutine_in_background(
+                self.logs_manager.info(f"Debug mode {'enabled' if enabled else 'disabled'}")
+            )
+            
+            if enabled:
+                # Enable additional logging
+                self.run_coroutine_in_background(
+                    self.logs_manager.info("Enabling detailed component logging")
+                )
+                # Set up debug listeners
+                self._setup_debug_listeners()
+                # Start more frequent health checks
+                self.start_debug_monitoring()
+            else:
+                # Disable debug listeners
+                self._cleanup_debug_listeners()
+                # Restore normal health check frequency
+                self.start_health_check_loop()
+                
+        except Exception as e:
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to set debug mode: {str(e)}")
+            )
+
+    def _setup_debug_listeners(self):
+        """Set up debug event listeners."""
+        try:
+            # Track all button clicks
+            for button_name in ["start", "pause", "stop"]:
+                button = getattr(self, f"{button_name}_button", None)
+                if button:
+                    button.bind('<Button-1>', lambda e, n=button_name: 
+                        self.run_coroutine_in_background(self._on_debug_click(n)))
+            
+            # Track window resizing
+            self.window.bind('<Configure>', lambda e: 
+                self.run_coroutine_in_background(self._on_debug_resize(e)))
+            
+            # Track tab changes
+            self.notebook.bind('<<NotebookTabChanged>>', lambda e:
+                self.run_coroutine_in_background(self._on_debug_tab_change()))
+            
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Debug listeners initialized")
+            )
+            
+        except Exception as e:
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to setup debug listeners: {str(e)}")
+            )
+
+    def _cleanup_debug_listeners(self):
+        """Remove debug event listeners."""
+        try:
+            # Remove button click tracking
+            for button_name in ["start", "pause", "stop"]:
+                button = getattr(self, f"{button_name}_button", None)
+                if button:
+                    button.unbind('<Button-1>')
+            
+            # Remove window resize tracking
+            self.window.unbind('<Configure>')
+            
+            # Remove tab change tracking
+            self.notebook.unbind('<<NotebookTabChanged>>')
+            
+            self.run_coroutine_in_background(
+                self.logs_manager.info("Debug listeners cleaned up")
+            )
+            
+        except Exception as e:
+            self.run_coroutine_in_background(
+                self.logs_manager.error(f"Failed to cleanup debug listeners: {str(e)}")
+            )
+
+    async def _on_debug_click(self, button_name: str):
+        """Handle debug button click events."""
+        try:
+            click_data = {
+                "button": button_name,
+                "timestamp": datetime.now().isoformat(),
+                "state": {
+                    "is_running": self.state["is_running"],
+                    "is_paused": self.state["is_paused"]
+                }
+            }
+            await self.logs_manager.info(f"Debug click: {json.dumps(click_data)}")
+            
+        except Exception as e:
+            await self.logs_manager.error(f"Failed to handle debug click: {str(e)}")
+
+    async def _on_debug_resize(self, event):
+        """Handle debug window resize events."""
+        try:
+            resize_data = {
+                "width": event.width,
+                "height": event.height,
+                "timestamp": datetime.now().isoformat()
+            }
+            await self.logs_manager.info(f"Debug resize: {json.dumps(resize_data)}")
+            
+        except Exception as e:
+            await self.logs_manager.error(f"Failed to handle debug resize: {str(e)}")
+
+    async def _on_debug_tab_change(self):
+        """Handle debug tab change events."""
+        try:
+            current_tab = self.notebook.select()
+            tab_name = self.notebook.tab(current_tab, "text")
+            
+            tab_data = {
+                "tab": tab_name,
+                "timestamp": datetime.now().isoformat()
+            }
+            await self.logs_manager.info(f"Debug tab change: {json.dumps(tab_data)}")
+            
+        except Exception as e:
+            await self.logs_manager.error(f"Failed to handle debug tab change: {str(e)}")
+
+    def start_debug_monitoring(self):
+        """Start more frequent health checks and detailed monitoring."""
+        async def debug_monitor_loop():
+            while getattr(self, 'debug_mode', False):
+                try:
+                    # More frequent health checks
+                    await self._check_component_health()
+                    
+                    # Additional debug metrics
+                    debug_metrics = {
+                        "timestamp": datetime.now().isoformat(),
+                        "memory": self._get_memory_usage(),
+                        "window": {
+                            "width": self.window.winfo_width(),
+                            "height": self.window.winfo_height(),
+                            "x": self.window.winfo_x(),
+                            "y": self.window.winfo_y()
+                        },
+                        "event_loop": {
+                            "tasks": len(asyncio.all_tasks(self.loop)) if self.loop else 0
+                        }
+                    }
+                    
+                    await self.logs_manager.info(f"Debug metrics: {json.dumps(debug_metrics, default=str)}")
+                    await asyncio.sleep(15)  # Check every 15 seconds in debug mode
+                    
+                except Exception as e:
+                    await self.logs_manager.error(f"Debug monitor error: {str(e)}")
+                    await asyncio.sleep(5)  # Short delay on error
+        
+        self.run_coroutine_in_background(debug_monitor_loop())
 
 # Additional comment about possibly splitting the code into a ui/components/ folder
 # if the GUI grows with multiple custom widgets or advanced config tabs.
