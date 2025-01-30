@@ -21,10 +21,8 @@ from aiologger.handlers.streams import AsyncStreamHandler
 # For optional color in logs
 from colorama import init as colorama_init, Fore, Style
 
-from utils.telemetry import TelemetryManager
-
 class LogsManager:
-    def __init__(self, settings):
+    def __init__(self, settings, telemetry_manager=None):
         """
         Args:
             settings (dict): Contains at least:
@@ -34,6 +32,7 @@ class LogsManager:
                         "log_level": "INFO" or "DEBUG"
                     }
                 }
+            telemetry_manager: Optional TelemetryManager instance for tracking events
         """
         # Get data_dir from system settings
         system_settings = settings.get('system', {})
@@ -56,7 +55,8 @@ class LogsManager:
         # Optional: colorize error/critical logs
         colorama_init(autoreset=True)  # ensures we reset color after each line
 
-        self.telemetry = TelemetryManager(settings)
+        # Store telemetry manager
+        self.telemetry_manager = telemetry_manager
 
     async def initialize(self):
         """
