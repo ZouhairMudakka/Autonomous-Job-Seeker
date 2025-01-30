@@ -44,16 +44,18 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from constants import TimingConstants, Selectors, Messages
 from utils.telemetry import TelemetryManager
 from utils.dom.dom_service import DomService
+from storage.logs_manager import LogsManager
 
 # Ensure your OPENAI_API_KEY or relevant GPT-4 key is in env vars.
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
 
 class FormFillerAgent:
-    def __init__(self, dom_service: DomService, settings: dict = None):
+    def __init__(self, dom_service: DomService, logs_manager: LogsManager, settings: dict = None):
         """Initialize form filler with DOM service and settings."""
         self.dom_service = dom_service
         self.settings = settings or {}
         self.telemetry = TelemetryManager(self.settings)
+        self.logs_manager = logs_manager
 
         # Standard delays
         self.human_delay_min = 0.3  # seconds
@@ -81,7 +83,7 @@ class FormFillerAgent:
 
         for field_name, field_value in form_data.items():
             if field_name not in form_mapping:
-                print(f"[FormFillerAgent] No mapping for field '{field_name}', skipping.")
+                await self.logs_manager.warning(f"No mapping for field '{field_name}', skipping.")
                 continue
 
             config = form_mapping[field_name]
@@ -90,15 +92,14 @@ class FormFillerAgent:
             required = config.get("required", False)  # whether the field is mandatory
 
             try:
+                await self.logs_manager.debug(f"Filling field '{field_name}' of type '{field_type}'")
                 await self._fill_field(field_name, field_value, selector, field_type, required)
                 await asyncio.sleep(TimingConstants.FORM_FIELD_DELAY)  # Delay between fields
             except Exception as e:
-                error_msg = f"[FormFillerAgent] Error filling field '{field_name}': {str(e)}"
+                error_msg = f"Error filling field '{field_name}': {str(e)}"
+                await self.logs_manager.error(error_msg)
                 if self.raise_on_error:
                     raise Exception(error_msg)
-                else:
-                    print(error_msg)
-                    # Log error and continue filling remaining fields
 
     async def submit_form(self, submit_button_selector: str) -> bool:
         """
@@ -108,17 +109,18 @@ class FormFillerAgent:
         """
         await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)  # Delay before submission
         try:
+            await self.logs_manager.info("Attempting to submit form...")
             element = await self._wait_for_element(submit_button_selector)
             await element.click()
             await asyncio.sleep(TimingConstants.FORM_SUBMIT_DELAY)  # Delay after submission
+            await self.logs_manager.info("Form submitted successfully")
             return True
         except Exception as e:
-            error_msg = f"[FormFillerAgent] Could not submit form: {str(e)}"
+            error_msg = f"Could not submit form: {str(e)}"
+            await self.logs_manager.error(error_msg)
             if self.raise_on_error:
                 raise Exception(error_msg)
-            else:
-                print(error_msg)
-                return False
+            return False
 
     async def fill_easy_apply(self, form_data: Dict[str, Any] = None) -> str:
         """
@@ -138,6 +140,7 @@ class FormFillerAgent:
         """
         try:
             form_data = form_data or {}
+            await self.logs_manager.info("Starting LinkedIn Easy Apply process...")
             
             # Step 1: Handle CV upload if required
             await self._handle_cv_upload(form_data.get("cv_path"))
@@ -147,9 +150,11 @@ class FormFillerAgent:
                 # Check for final submit button first
                 submit_btn = await self.dom_service.query_selector('button[aria-label="Submit application"]')
                 if submit_btn:
+                    await self.logs_manager.info("Found submit button, completing application...")
                     await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await submit_btn.click()
                     await asyncio.sleep(TimingConstants.FORM_SUBMIT_DELAY)
+                    await self.logs_manager.info("Application submitted successfully")
                     return "applied"
                 
                 # Fill visible form fields on current step
@@ -158,15 +163,16 @@ class FormFillerAgent:
                 # Look for and click "Next" button
                 next_btn = await self.dom_service.query_selector('button[aria-label="Continue to next step"]')
                 if next_btn:
+                    await self.logs_manager.debug("Moving to next form step...")
                     await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await next_btn.click()
                     await asyncio.sleep(TimingConstants.ACTION_DELAY)
                 else:
-                    print("[FormFillerAgent] No next or submit button found.")
+                    await self.logs_manager.warning("No next or submit button found")
                     return "failed"
                     
         except Exception as e:
-            print(f"[FormFillerAgent] Easy Apply form filling failed: {e}")
+            await self.logs_manager.error(f"Easy Apply form filling failed: {e}")
             return "failed"
 
     async def _handle_cv_upload(self, cv_path: Optional[str]):
@@ -175,12 +181,14 @@ class FormFillerAgent:
             upload_input = await self.dom_service.query_selector('input[type="file"][name="fileId"]')
             if upload_input:
                 if cv_path:
+                    await self.logs_manager.info(f"Uploading CV from: {cv_path}")
                     await upload_input.set_input_files(cv_path)
                     await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
+                    await self.logs_manager.info("CV upload completed")
                 else:
-                    print("[FormFillerAgent] CV upload required but no CV path provided.")
+                    await self.logs_manager.warning("CV upload required but no CV path provided")
         except Exception as e:
-            print(f"[FormFillerAgent] CV upload failed: {e}")
+            await self.logs_manager.error(f"CV upload failed: {e}")
 
     async def _fill_current_step_fields(self, form_data: Dict[str, Any]):
         """
@@ -188,14 +196,17 @@ class FormFillerAgent:
         Handles common LinkedIn form field types.
         """
         try:
+            await self.logs_manager.debug("Processing current form step fields...")
             # Phone number field
             phone_input = await self.dom_service.query_selector('input[name="phoneNumber"]')
             if phone_input and form_data.get("phone"):
+                await self.logs_manager.debug("Filling phone number field")
                 await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                 await phone_input.fill(form_data["phone"])
 
             # Work authorization radio buttons
             if form_data.get("work_authorization"):
+                await self.logs_manager.debug("Setting work authorization")
                 auth_radio = await self.dom_service.query_selector(
                     f'label:has-text("{form_data["work_authorization"]}")'
                 )
@@ -205,6 +216,7 @@ class FormFillerAgent:
 
             # Years of experience dropdown/select
             if form_data.get("years_of_experience"):
+                await self.logs_manager.debug("Setting years of experience")
                 exp_select = await self.dom_service.query_selector('select[id*="experience"]')
                 if exp_select:
                     await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
@@ -214,6 +226,8 @@ class FormFillerAgent:
             required_checkboxes = await self.dom_service.query_selector_all(
                 'input[type="checkbox"][required]'
             )
+            if required_checkboxes:
+                await self.logs_manager.debug(f"Processing {len(required_checkboxes)} required checkboxes")
             for checkbox in required_checkboxes:
                 if not await checkbox.is_checked():
                     await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
@@ -223,14 +237,18 @@ class FormFillerAgent:
             required_textareas = await self.dom_service.query_selector_all(
                 'textarea[required]'
             )
+            if required_textareas:
+                await self.logs_manager.debug(f"Processing {len(required_textareas)} required text areas")
             for textarea in required_textareas:
                 existing_value = await textarea.input_value()
                 if not existing_value:
                     await asyncio.sleep(TimingConstants.HUMAN_DELAY_MIN)
                     await textarea.fill("N/A")
 
+            await self.logs_manager.debug("Completed processing current form step")
+
         except Exception as e:
-            print(f"[FormFillerAgent] Error filling current step fields: {e}")
+            await self.logs_manager.error(f"Error filling current step fields: {e}")
 
     async def _check_disqualifying_questions(self) -> bool:
         """
@@ -240,16 +258,16 @@ class FormFillerAgent:
         try:
             exp_question = await self.dom_service.query_selector('label:has-text("years of experience")')
             if exp_question:
-                print("[FormFillerAgent] Found experience requirement question")
+                await self.logs_manager.debug("Found experience requirement question")
                 
             cert_question = await self.dom_service.query_selector('label:has-text("certifications")')
             if cert_question:
-                print("[FormFillerAgent] Found certification requirement")
+                await self.logs_manager.debug("Found certification requirement")
                 
             return True  # Continue by default
             
         except Exception as e:
-            print(f"[FormFillerAgent] Error checking disqualifying questions: {e}")
+            await self.logs_manager.error(f"Error checking disqualifying questions: {e}")
             return True  # Continue on error
 
     # -------------------------------------------------------------------------
@@ -293,7 +311,7 @@ class FormFillerAgent:
         elif field_type in ["cover_letter_text", "cover_letter_upload"]:
             await self._handle_cover_letter(field_type, selector, value, required)
         else:
-            print(f"[FormFillerAgent] Unknown field type '{field_type}' for '{field_name}', skipping.")
+            await self.logs_manager.warning(f"Unknown field type '{field_type}' for '{field_name}', skipping.")
 
     # -------------------------------------------------------------------------
     # Handler Methods
@@ -332,10 +350,10 @@ class FormFillerAgent:
                 if new_path and Path(new_path).exists():
                     file_path = new_path
                 else:
-                    print("[FormFillerAgent] Skipping upload since no valid file was provided.")
+                    await self.logs_manager.warning("Skipping upload since no valid file was provided.")
                     return
             else:
-                print(f"[FormFillerAgent] {msg}, skipping upload.")
+                await self.logs_manager.warning(f"{msg}, skipping upload.")
                 return
 
         await self._human_delay(0.6, 1.2)
@@ -351,43 +369,50 @@ class FormFillerAgent:
 
         while attempts < 2 and cover_text is None:
             try:
+                await self.logs_manager.info("Attempting to generate cover letter...")
                 cover_text = await self._generate_cover_letter_if_needed(value)
             except Exception as e:
                 attempts += 1
-                print(f"[FormFillerAgent] Cover letter generation failed (attempt {attempts}). Error: {e}")
+                await self.logs_manager.error(f"Cover letter generation failed (attempt {attempts}). Error: {e}")
                 if attempts < 2:
-                    print("[FormFillerAgent] Retrying cover letter generation...")
+                    await self.logs_manager.info("Retrying cover letter generation...")
                 else:
                     if required:
                         # Prompt user for manual cover letter
+                        await self.logs_manager.warning("Cover letter is required but generation failed twice. Requesting manual input...")
                         user_input = input("Cover letter is required but generation failed twice. Please paste cover letter text: ").strip()
                         if user_input:
                             cover_text = user_input
+                            await self.logs_manager.info("Manual cover letter received")
                         else:
-                            print("[FormFillerAgent] No cover letter provided; skipping.")
+                            await self.logs_manager.warning("No cover letter provided; skipping.")
                     else:
-                        print("[FormFillerAgent] Cover letter not required; skipping after failures.")
+                        await self.logs_manager.warning("Cover letter not required; skipping after failures.")
             else:
                 # If we got cover_text successfully, break
+                if cover_text:
+                    await self.logs_manager.info("Cover letter generated successfully")
                 break
 
         if not cover_text:
-            print("[FormFillerAgent] No cover letter generated or provided. Skipping.")
+            await self.logs_manager.warning("No cover letter generated or provided. Skipping.")
             return
 
         if field_type == "cover_letter_text":
             element = await self._wait_for_element(selector)
             await self._handle_text_field(element, cover_text)
+            await self.logs_manager.info("Cover letter text filled in form")
         elif field_type == "cover_letter_upload":
             file_path = await self._write_cover_letter_to_file(cover_text)
             element = await self._wait_for_element(selector)
             await self._handle_file_upload(element, file_path, required=False)
+            await self.logs_manager.info("Cover letter uploaded as file")
             # Cleanup
             if Path(file_path).exists():
                 try:
                     Path(file_path).unlink()
-                except:
-                    pass
+                except Exception as e:
+                    await self.logs_manager.error(f"Failed to cleanup temporary cover letter file: {e}")
 
     # -------------------------------------------------------------------------
     # Cover Letter Generation Logic
@@ -395,11 +420,13 @@ class FormFillerAgent:
     async def _generate_cover_letter_if_needed(self, value: Any) -> str:
         """If 'value' is a string, use it. If it's a dict, call GPT. Otherwise, return empty."""
         if isinstance(value, str):
+            await self.logs_manager.debug("Using provided cover letter text")
             return value
 
         if isinstance(value, dict):
             job_title = value.get("job_title", "N/A")
             job_desc = value.get("job_description", "")
+            await self.logs_manager.debug(f"Generating cover letter for position: {job_title}")
             cover_text = await self._call_llm_cover_letter(job_title, job_desc)
             return cover_text
 
@@ -407,6 +434,11 @@ class FormFillerAgent:
 
     async def _call_llm_cover_letter(self, job_title: str, job_description: str) -> str:
         """Example GPT-4 call, done via run_in_executor for a sync OpenAI call."""
+        if not openai.api_key:
+            error_msg = "OpenAI API key not set. Please set OPENAI_API_KEY."
+            await self.logs_manager.error(error_msg)
+            raise ValueError(error_msg)
+
         prompt = (
             f"Write a concise but effective cover letter for a position:\n"
             f"Job Title: {job_title}\n"
@@ -414,15 +446,19 @@ class FormFillerAgent:
             f"Keep it professional, 200 words or fewer."
         )
 
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, self._sync_openai_chat_completion, prompt)
-        return response
+        try:
+            await self.logs_manager.debug("Calling OpenAI API for cover letter generation...")
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(None, self._sync_openai_chat_completion, prompt)
+            await self.logs_manager.debug("Cover letter generated successfully")
+            return response
+        except Exception as e:
+            error_msg = f"OpenAI GPT-4o cover letter generation failed: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            raise RuntimeError(error_msg)
 
     def _sync_openai_chat_completion(self, prompt: str) -> str:
         """Blocking call to OpenAI's ChatCompletion API (GPT-4o)."""
-        if not openai.api_key:
-            raise ValueError("OpenAI API key not set. Please set OPENAI_API_KEY.")
-
         try:
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
@@ -432,13 +468,19 @@ class FormFillerAgent:
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            raise RuntimeError(f"OpenAI GPT-4o cover letter generation failed: {str(e)}")
+            raise RuntimeError(f"OpenAI API call failed: {str(e)}")
 
     async def _write_cover_letter_to_file(self, cover_text: str) -> str:
         """Write cover letter text to a .txt file for uploading. Returns file path."""
         temp_file = Path("temp_cover_letter.txt")
-        temp_file.write_text(cover_text, encoding="utf-8")
-        return str(temp_file)
+        try:
+            temp_file.write_text(cover_text, encoding="utf-8")
+            await self.logs_manager.debug(f"Cover letter written to temporary file: {temp_file}")
+            return str(temp_file)
+        except Exception as e:
+            error_msg = f"Failed to write cover letter to file: {e}"
+            await self.logs_manager.error(error_msg)
+            raise RuntimeError(error_msg)
 
     # -------------------------------------------------------------------------
     # Utility Methods
@@ -449,13 +491,17 @@ class FormFillerAgent:
         Uses DomService internally.
         """
         try:
+            await self.logs_manager.debug(f"Waiting for element: {selector}")
             element = await self.dom_service.wait_for_selector(
                 selector,
                 timeout=TimingConstants.DEFAULT_TIMEOUT
             )
+            await self.logs_manager.debug(f"Element found: {selector}")
             return element
         except PlaywrightTimeoutError:
-            raise Exception(f"Timeout waiting for element: {selector}")
+            error_msg = f"Timeout waiting for element: {selector}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def _human_delay(self, min_sec: float = None, max_sec: float = None):
         """
