@@ -10,6 +10,39 @@
  *       (e.g. after scrolling).
  */
 
+// Logging bridge function that will be injected by Python
+let logToPython = (level, message) => {
+    // Default implementation logs to console
+    // This will be overridden by Python code
+    console[level](`[DOM Tree] ${message}`);
+};
+
+// Logging helper functions
+function logInfo(message) {
+    logToPython('info', message);
+    // Keep console.log for immediate browser feedback
+    console.log(`[DOM Tree] ${message}`);
+}
+
+function logError(message, error) {
+    const errorMsg = error ? `${message}: ${error.message || error}` : message;
+    logToPython('error', errorMsg);
+    // Keep console.error for immediate browser feedback
+    console.error(`[DOM Tree] ${errorMsg}`);
+}
+
+function logDebug(message) {
+    logToPython('debug', message);
+    // Keep console.debug for immediate browser feedback
+    console.debug(`[DOM Tree] ${message}`);
+}
+
+function logWarning(message) {
+    logToPython('warning', message);
+    // Keep console.warn for immediate browser feedback
+    console.warn(`[DOM Tree] ${message}`);
+}
+
 // Add at the top of the file
 function clearHighlightContainer() {
   const container = document.getElementById("dom-highlight-container");
@@ -58,7 +91,7 @@ function isClickableElement(el) {
 
         return false;
     } catch (error) {
-        console.error("Error in isClickableElement:", error);
+        logError("Error in isClickableElement", error);
         return false;
     }
 }
@@ -112,7 +145,7 @@ function isVisibleElement(el) {
         
         return true;
     } catch (error) {
-        console.error("Error in isVisibleElement:", error);
+        logError("Error in isVisibleElement", error);
         return false;
     }
 }
@@ -155,7 +188,7 @@ function isInViewport(el) {
         
         return inHorizView && inVertView && hasSize && isReasonablyPositioned;
     } catch (error) {
-        console.error("Error in isInViewport:", error);
+        logError("Error in isInViewport", error);
         return false;
     }
 }
@@ -226,7 +259,7 @@ function highlightElement(el, highlightIndex) {
         container.appendChild(fragment);
 
     } catch (error) {
-        console.error("Error in highlightElement:", error);
+        logError("Error in highlightElement", error);
     }
 }
 
@@ -235,8 +268,11 @@ function highlightElement(el, highlightIndex) {
  * prioritizing those in the visible viewport first.
  */
 function buildDomTree(root, doHighlight, maxHighlight) {
+  logInfo(`Starting DOM tree build with highlight=${doHighlight}, maxHighlight=${maxHighlight}`);
+  
   // Clear existing highlights
   clearHighlightContainer();
+  logDebug("Cleared existing highlight container");
 
   let clickableElements = [];
 
@@ -263,7 +299,7 @@ function buildDomTree(root, doHighlight, maxHighlight) {
         children: [],
         isClickable: clickable,
         isVisible: visible,
-        isInViewport: inViewport // Additional property for sorting
+        isInViewport: inViewport
       };
 
       // Add attributes
@@ -293,31 +329,38 @@ function buildDomTree(root, doHighlight, maxHighlight) {
   }
 
   const tree = traverse(root);
+  logInfo(`Found ${clickableElements.length} clickable and visible elements`);
 
   // Now we handle highlighting if doHighlight is true
   if (doHighlight) {
-    // Sort clickableElements:
-    // 1. in-viewport first
-    // 2. then out-of-viewport
+    logDebug("Starting element highlighting");
+    
+    // Sort clickableElements
     clickableElements.sort((a, b) => {
       const aInView = a.elementData.isInViewport ? 1 : 0;
       const bInView = b.elementData.isInViewport ? 1 : 0;
-      // Descending: in-viewport (1) before out-of-viewport (0)
       if (aInView !== bInView) return bInView - aInView;
 
-      // If both are same in-viewport status, let's sort by top offset
       const rectA = a.node.getBoundingClientRect();
       const rectB = b.node.getBoundingClientRect();
       return rectA.top - rectB.top;
     });
 
     let highlightCount = 0;
+    const inViewportCount = clickableElements.filter(el => el.elementData.isInViewport).length;
+    logInfo(`Found ${inViewportCount} elements in viewport out of ${clickableElements.length} total clickable`);
+
     for (const { node, elementData } of clickableElements) {
-      if (highlightCount >= maxHighlight) break;
+      if (highlightCount >= maxHighlight) {
+        logDebug(`Reached maximum highlight limit of ${maxHighlight}`);
+        break;
+      }
       highlightElement(node, highlightCount);
       elementData.highlightIndex = highlightCount;
       highlightCount++;
     }
+    
+    logInfo(`Highlighted ${highlightCount} elements`);
   }
 
   return tree;
