@@ -1,31 +1,39 @@
 """DOM Element Models and Node Structures"""
 
 import asyncio
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
-from storage.logs_manager import LogsManager
+
+if TYPE_CHECKING:
+    from storage.logs_manager import LogsManager
 
 @dataclass
 class DOMBaseNode:
     """Base node type, can be 'element' or 'text'."""
     type: str
-    logs_manager: Optional[LogsManager] = None
+    logs_manager: Optional['LogsManager'] = None
 
 @dataclass
-class DOMTextNode(DOMBaseNode):
+class DOMTextNode:
+    """Text node containing content."""
     content: str
+    type: str = 'text'
+    logs_manager: Optional['LogsManager'] = None
 
 @dataclass
-class DOMElementNode(DOMBaseNode):
+class DOMElementNode:
+    """Element node with attributes and children."""
     tag: str
+    type: str = 'element'
     attributes: Dict[str, str] = field(default_factory=dict)
-    children: List[DOMBaseNode] = field(default_factory=list)
+    children: List['DOMBaseNode'] = field(default_factory=list)
     is_clickable: bool = False
     is_visible: bool = False
     highlight_index: Optional[int] = None
+    logs_manager: Optional['LogsManager'] = None
 
     @classmethod
-    async def from_dict(cls, data: Dict, logs_manager: Optional[LogsManager] = None) -> 'DOMBaseNode':
+    async def from_dict(cls, data: Dict, logs_manager: Optional['LogsManager'] = None) -> 'DOMBaseNode':
         """Create a DOM node from a dictionary representation.
         
         Args:
@@ -41,7 +49,6 @@ class DOMElementNode(DOMBaseNode):
             if logs_manager:
                 await logs_manager.debug(f"Creating text node with content length: {len(data.get('content', ''))}")
             return DOMTextNode(
-                type='text',
                 content=data.get('content', ''),
                 logs_manager=logs_manager
             )
@@ -60,7 +67,6 @@ class DOMElementNode(DOMBaseNode):
                 await logs_manager.debug(f"Created element with {len(children_nodes)} children")
 
             return DOMElementNode(
-                type='element',
                 tag=data.get('tag', ''),
                 attributes=data.get('attributes', {}),
                 children=children_nodes,
@@ -72,7 +78,7 @@ class DOMElementNode(DOMBaseNode):
         else:
             if logs_manager:
                 await logs_manager.warning(f"Unknown node type: {node_type}, falling back to text node")
-            return DOMTextNode(type='text', content='', logs_manager=logs_manager)
+            return DOMTextNode(content='', logs_manager=logs_manager)
 
     async def find_clickable_elements(self) -> List['DOMElementNode']:
         """Collect all clickable & visible child elements (including self)."""
