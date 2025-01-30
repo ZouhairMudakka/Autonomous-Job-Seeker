@@ -35,7 +35,7 @@ Future Enhancements:
 """
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -43,7 +43,9 @@ from pathlib import Path
 import json
 import aiofiles
 import uuid
-from storage.logs_manager import LogsManager
+
+if TYPE_CHECKING:
+    from storage.logs_manager import LogsManager
 
 @dataclass
 class TelemetryEvent:
@@ -57,7 +59,7 @@ class TelemetryEvent:
     session_duration: float = None
 
 class TelemetryManager:
-    def __init__(self, settings: Dict, logs_manager: LogsManager = None):
+    def __init__(self, settings: Dict, logs_manager: Optional['LogsManager'] = None):
         """Initialize TelemetryManager with settings and optional logs_manager."""
         self.logger = logging.getLogger(__name__)
         self.enabled = settings.get('telemetry', {}).get('enabled', True)
