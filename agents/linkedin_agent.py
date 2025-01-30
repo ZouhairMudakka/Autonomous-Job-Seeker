@@ -173,7 +173,8 @@ class LinkedInAgent:
         controller,
         default_timeout: float = TimingConstants.DEFAULT_TIMEOUT,
         min_delay: float = TimingConstants.HUMAN_DELAY_MIN,
-        max_delay: float = TimingConstants.HUMAN_DELAY_MAX
+        max_delay: float = TimingConstants.HUMAN_DELAY_MAX,
+        logs_manager: Optional[LogsManager] = None
     ):
         """
         Args:
@@ -182,10 +183,11 @@ class LinkedInAgent:
             default_timeout (float): Default wait in ms for elements.
             min_delay (float): Minimum random delay for human-like interactions.
             max_delay (float): Maximum random delay for human-like interactions.
+            logs_manager (LogsManager, optional): Instance of LogsManager for async logging.
         """
         self.page = page
         self.controller = controller
-        self.logs_manager = controller.logs_manager
+        self.logs_manager = logs_manager or controller.logs_manager
         self.default_timeout = min(default_timeout, TimingConstants.MAX_WAIT_TIME)
         self.min_delay = min_delay
         self.max_delay = max_delay
