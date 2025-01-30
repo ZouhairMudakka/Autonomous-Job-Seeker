@@ -23,7 +23,6 @@ import platform
 import os
 from storage.logs_manager import LogsManager
 from utils.telemetry import TelemetryManager
-import logging
 
 class BrowserSetup:
     # Default paths for different browsers based on OS
@@ -99,13 +98,6 @@ class BrowserSetup:
         # For attaching to an existing browser
         self.cdp_port = int(self.settings.get('cdp_port', 9222))
         self.cdp_url = f"http://127.0.0.1:{self.cdp_port}"
-
-        # Setup logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger(__name__)
 
     async def _log_info(self, message: str):
         """Helper to log with file/line reference."""
