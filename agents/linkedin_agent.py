@@ -582,7 +582,11 @@ class LinkedInAgent:
                 # Initialize FormFillerAgent if needed
                 if not hasattr(self, 'form_filler_agent'):
                     from agents.form_filler_agent import FormFillerAgent
-                    self.form_filler_agent = FormFillerAgent(page=self.page, default_wait=TimingConstants.DEFAULT_TIMEOUT)
+                    self.form_filler_agent = FormFillerAgent(
+                        dom_service=self.dom_service,
+                        logs_manager=self.logs_manager,
+                        settings=self.settings
+                    )
 
                 result = await self._multi_step_easy_apply()
                 await self._log_outcome(method, result == "applied", f"Easy Apply result: {result}")
