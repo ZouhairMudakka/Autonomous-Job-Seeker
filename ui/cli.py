@@ -45,6 +45,7 @@ class CLI(cmd.Cmd):
         super().__init__()
         self.controller = controller
         self.telemetry = TelemetryManager(controller.settings)
+        self.logs_manager = controller.logs_manager
 
     # -------------------------------------------------------------------------
     # Commands
@@ -57,21 +58,24 @@ class CLI(cmd.Cmd):
         """
         await self.telemetry.track_cli_command("start", {"args": arg})
         try:
-            # If controller.start_session() is async, we do:
-            asyncio.run(self.controller.start_session())
-            print("Session started successfully.")
+            await self.logs_manager.info("Starting new automation session...")
+            await self.controller.start_session()
+            await self.logs_manager.info("Session started successfully.")
         except Exception as e:
-            print(f"Error starting session: {str(e)}")
+            await self.logs_manager.error(f"Error starting session: {str(e)}")
+            raise
 
-    def do_stop(self, arg):
+    async def do_stop(self, arg):
         """
         Stop the current automation session.
         """
         try:
-            asyncio.run(self.controller.end_session())
-            print("Session ended successfully.")
+            await self.logs_manager.info("Stopping current automation session...")
+            await self.controller.end_session()
+            await self.logs_manager.info("Session ended successfully.")
         except Exception as e:
-            print(f"Error ending session: {str(e)}")
+            await self.logs_manager.error(f"Error ending session: {str(e)}")
+            raise
 
     async def do_status(self, arg):
         """
@@ -79,25 +83,21 @@ class CLI(cmd.Cmd):
         Because tracker_agent log_activity is async, we wrap get_activities in an async call, too.
         """
         await self.telemetry.track_cli_command('status')
-        # We'll define an inline async function to fetch logs, then run it:
-        async def fetch_logs():
-            # If your tracker_agent.get_activities is synchronous, just call it directly.
-            # If it's async, we do: return await self.controller.tracker_agent.get_activities()
-            df = self.controller.tracker_agent.get_activities()  # Suppose it's sync
-            return df
-
+        await self.logs_manager.info("Fetching current automation status...")
+        
         try:
-            activities = asyncio.run(fetch_logs())
+            activities = self.controller.tracker_agent.get_activities()
             if activities.empty:
-                print("No activities recorded yet.")
+                await self.logs_manager.info("No activities recorded yet.")
             else:
-                print("\nRecent activities:")
-                # Show the last few
+                await self.logs_manager.info("\nRecent activities:")
+                # We still use print for the actual dataframe display since it's tabular data
                 print(activities.tail().to_string(index=False))
         except Exception as e:
-            print(f"Error retrieving status: {str(e)}")
+            await self.logs_manager.error(f"Error retrieving status: {str(e)}")
+            raise
 
-    def do_search(self, arg):
+    async def do_search(self, arg):
         """
         Example command to run a job search & apply flow.
         Usage: search "Job Title" "Location"
@@ -106,59 +106,64 @@ class CLI(cmd.Cmd):
         try:
             parts = shlex.split(arg)
             if len(parts) < 2:
-                print('Usage: search "Job Title" "Location"')
+                await self.logs_manager.warning('Usage: search "Job Title" "Location"')
                 return
             job_title = parts[0]
             location = parts[1] if len(parts) > 1 else ""
-        except ValueError:
-            print('Failed to parse arguments. Ensure you use quotes around the title and location.')
-            return
-
-        async def run_flow():
+            
+            await self.logs_manager.info(f"Starting job search for '{job_title}' in '{location}'...")
             await self.controller.run_linkedin_flow(job_title, location)
-            print(f"Searched & applied for '{job_title}' in '{location}'.")
-
-        try:
-            asyncio.run(run_flow())
+            await self.logs_manager.info(f"Completed search & apply flow for '{job_title}' in '{location}'.")
+            
+        except ValueError:
+            await self.logs_manager.error('Failed to parse arguments. Ensure you use quotes around the title and location.')
         except Exception as e:
-            print(f"Error running job search flow: {str(e)}")
+            await self.logs_manager.error(f"Error running job search flow: {str(e)}")
+            raise
 
-    def do_pause(self, arg):
+    async def do_pause(self, arg):
         """
         Pause the current automation session.
         """
         try:
-            asyncio.run(self.controller.pause_session())
-            print("Session paused.")
+            await self.logs_manager.info("Pausing current session...")
+            await self.controller.pause_session()
+            await self.logs_manager.info("Session paused successfully.")
         except Exception as e:
-            print(f"Error pausing session: {str(e)}")
+            await self.logs_manager.error(f"Error pausing session: {str(e)}")
+            raise
 
-    def do_resume(self, arg):
+    async def do_resume(self, arg):
         """
         Resume the current automation session.
         """
         try:
-            asyncio.run(self.controller.resume_session())
-            print("Session resumed.")
+            await self.logs_manager.info("Resuming session...")
+            await self.controller.resume_session()
+            await self.logs_manager.info("Session resumed successfully.")
         except Exception as e:
-            print(f"Error resuming session: {str(e)}")
+            await self.logs_manager.error(f"Error resuming session: {str(e)}")
+            raise
 
-    def do_quit(self, arg):
+    async def do_quit(self, arg):
         """
         Exit the application gracefully.
         """
-        print("Shutting down CLI...")
+        await self.logs_manager.info("Shutting down CLI...")
         try:
-            asyncio.run(self.controller.end_session())
+            await self.controller.end_session()
+            await self.logs_manager.info("Session ended, goodbye!")
+            return True
         except Exception as e:
-            print(f"Error ending session: {str(e)}")
-        return True
+            await self.logs_manager.error(f"Error during shutdown: {str(e)}")
+            raise
 
     async def do_config(self, args):
         """Update preferences."""
         await self.telemetry.track_cli_command('config', {'args': args})
+        await self.logs_manager.info(f"Updating configuration with args: {args}")
         # ... existing code ...
 
-    def default(self, line):
-        print(f"Unknown command: {line}")
-        print("Type 'help' or '?' for available commands.")
+    async def default(self, line):
+        await self.logs_manager.warning(f"Unknown command: {line}")
+        await self.logs_manager.info("Type 'help' or '?' for available commands.")
