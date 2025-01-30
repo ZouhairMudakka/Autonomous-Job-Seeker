@@ -2,18 +2,20 @@
 
 import os
 import json
-from typing import List, Optional, Any
+from typing import List, Optional, Any, TYPE_CHECKING
 from playwright.async_api import Page, ElementHandle, TimeoutError as PlaywrightTimeoutError
-from utils.telemetry import TelemetryManager
-from storage.logs_manager import LogsManager
-from .dom_models import DOMElementNode
 import asyncio
+from .dom_models import DOMElementNode
+
+if TYPE_CHECKING:
+    from utils.telemetry import TelemetryManager
+    from storage.logs_manager import LogsManager
 
 class DomService:
-    def __init__(self, page: Page, telemetry: TelemetryManager = None, settings: dict = None, logs_manager: LogsManager = None):
+    def __init__(self, page: Page, telemetry: Optional['TelemetryManager'] = None, settings: dict = None, logs_manager: Optional['LogsManager'] = None):
         """Initialize DOM service with page and optional telemetry."""
         self.page = page
-        self.telemetry = telemetry or TelemetryManager(settings or {"telemetry": {"enabled": True}})
+        self.telemetry = telemetry
         self.logs_manager = logs_manager
         
         self.js_path = os.path.join(
