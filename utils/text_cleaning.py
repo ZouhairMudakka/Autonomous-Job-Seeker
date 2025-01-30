@@ -19,6 +19,8 @@ Future Expansions:
 
 import re
 from typing import Optional, List
+import asyncio
+from storage.logs_manager import LogsManager
 
 # If you want to unify patterns, you could import RegexUtils from regex_utils
 # and call RegexUtils().extract_emails(...) or similar. For the MVP, we keep local patterns.
@@ -29,65 +31,84 @@ class TextCleaner:
     In future expansions, you might unify or reference regex_utils to avoid duplication.
     """
 
-    @staticmethod
-    def normalize_whitespace(text: str) -> str:
+    def __init__(self, logs_manager: LogsManager):
+        """Initialize with a LogsManager instance for async logging."""
+        self.logs_manager = logs_manager
+
+    async def normalize_whitespace(self, text: str) -> str:
         """
         Standardize whitespace in text by splitting on any whitespace 
         and rejoining with a single space.
         e.g., multiple spaces, tabs, newlines -> single space
         """
-        return ' '.join(text.split())
+        await self.logs_manager.debug(f"Normalizing whitespace for text of length {len(text)}")
+        result = ' '.join(text.split())
+        await self.logs_manager.debug(f"Whitespace normalization complete. New length: {len(result)}")
+        return result
 
-    @staticmethod
-    def clean_html(text: str) -> str:
+    async def clean_html(self, text: str) -> str:
         """
         Remove HTML tags from text (MVP approach).
         Future expansions might handle advanced cases or keep certain tags.
         """
+        await self.logs_manager.debug(f"Cleaning HTML from text of length {len(text)}")
         html_pattern = r'<[^>]+>'
-        return re.sub(html_pattern, '', text)
+        result = re.sub(html_pattern, '', text)
+        await self.logs_manager.debug(f"HTML cleaning complete. New length: {len(result)}")
+        return result
 
     # -------------------------------------------------------------------------
     # Basic Extraction (duplicating some logic from regex_utils for MVP)
     # -------------------------------------------------------------------------
-    @staticmethod
-    def extract_email(text: str) -> Optional[str]:
+    async def extract_email(self, text: str) -> Optional[str]:
         """
         Extract the first email address from text.
         For multiple addresses, consider using re.findall or referencing regex_utils.
         """
+        await self.logs_manager.debug("Attempting to extract email address")
         email_pattern = r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
         match = re.search(email_pattern, text)
-        return match.group(0) if match else None
+        if match:
+            email = match.group(0)
+            await self.logs_manager.debug(f"Successfully extracted email: {email}")
+            return email
+        await self.logs_manager.debug("No email address found in text")
+        return None
 
-    @staticmethod
-    def extract_phone(text: str) -> Optional[str]:
+    async def extract_phone(self, text: str) -> Optional[str]:
         """
         Extract the first phone number from text (MVP approach).
         Future expansions might handle multiple matches, international formats, etc.
         If you want a single source of truth, unify with regex_utils patterns.
         """
+        await self.logs_manager.debug("Attempting to extract phone number")
         phone_pattern = (
             r'(?:\+?\d{1,4}[.\-\s]?)?'
             r'(?:\(?\d{3}\)?[.\-\s]?\d{3}[.\-\s]?\d{4})'
         )
         match = re.search(phone_pattern, text)
-        return match.group(0) if match else None
+        if match:
+            phone = match.group(0)
+            await self.logs_manager.debug(f"Successfully extracted phone number: {phone}")
+            return phone
+        await self.logs_manager.debug("No phone number found in text")
+        return None
 
-    @staticmethod
-    def extract_urls(text: str) -> List[str]:
+    async def extract_urls(self, text: str) -> List[str]:
         """
         Extract all URLs from the text.
         For advanced scenarios (e.g. capturing ftp://, etc.), unify with regex_utils or expand pattern.
         """
+        await self.logs_manager.debug("Attempting to extract URLs")
         url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+' 
-        return re.findall(url_pattern, text)
+        urls = re.findall(url_pattern, text)
+        await self.logs_manager.debug(f"Found {len(urls)} URLs in text")
+        return urls
 
-    @staticmethod
-    def standardize_dates(text: str) -> str:
+    async def standardize_dates(self, text: str) -> str:
         """
         Placeholder for date format standardization.
         Future expansions might parse mm/dd/yyyy vs. dd/mm/yyyy and unify them.
         """
-        # For MVP, return text unchanged.
+        await self.logs_manager.debug("Date standardization requested (currently a no-op)")
         return text
