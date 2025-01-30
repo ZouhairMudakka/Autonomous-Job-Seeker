@@ -21,9 +21,9 @@ from pathlib import Path
 import json
 import platform
 import os
-import logging
-import inspect
+from storage.logs_manager import LogsManager
 from utils.telemetry import TelemetryManager
+import logging
 
 class BrowserSetup:
     # Default paths for different browsers based on OS
@@ -45,7 +45,7 @@ class BrowserSetup:
         }
     }
 
-    def __init__(self, settings: Dict):
+    def __init__(self, settings: Dict, logs_manager: LogsManager):
         """
         Initialize browser configuration.
 
@@ -66,9 +66,11 @@ class BrowserSetup:
                      "data_dir": "./data"
                   }
                 }
+            logs_manager (LogsManager): Instance of LogsManager for async logging
         """
         self.settings = settings.get('browser', {})
         self.telemetry = TelemetryManager(settings)
+        self.logs_manager = logs_manager
 
         # Determine data directory
         data_dir = (
@@ -105,12 +107,9 @@ class BrowserSetup:
         )
         self.logger = logging.getLogger(__name__)
 
-    def _log_info(self, message: str):
+    async def _log_info(self, message: str):
         """Helper to log with file/line reference."""
-        frame = inspect.currentframe().f_back
-        line_number = frame.f_lineno
-        filename = os.path.basename(frame.f_code.co_filename)
-        self.logger.info(f"[{filename}:{line_number}] {message}")
+        await self.logs_manager.info(f"[BrowserSetup] {message}")
 
     def _get_browser_path(self) -> Optional[str]:
         """Get the appropriate browser executable path based on OS and self.browser_type."""
@@ -128,70 +127,93 @@ class BrowserSetup:
         try:
             # Only chromium-based attach is fully supported
             if self.browser_type in ['edge', 'chrome']:
+                await self.logs_manager.info(f"Attempting to connect to existing {self.browser_type} browser at {self.cdp_url}")
                 return await playwright.chromium.connect_over_cdp(self.cdp_url)
             elif self.browser_type == 'firefox':
-                raise NotImplementedError("Attaching to existing Firefox is not supported by Playwright.")
+                msg = "Attaching to existing Firefox is not supported by Playwright."
+                await self.logs_manager.error(msg)
+                raise NotImplementedError(msg)
             else:
-                raise NotImplementedError(f"Attach only supported for edge/chrome, got {self.browser_type}")
+                msg = f"Attach only supported for edge/chrome, got {self.browser_type}"
+                await self.logs_manager.error(msg)
+                raise NotImplementedError(msg)
         except Exception as e:
-            raise Exception(f"Failed to attach to browser at {self.cdp_url}: {e}")
+            error_msg = f"Failed to attach to browser at {self.cdp_url}: {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def _launch_firefox_persistent(self, playwright) -> Tuple[BrowserContext, Page]:
         """
         Launch persistent Firefox context with NO incognito, returning (context, page).
         """
-        profile_dir = self.profiles_dir / "firefox"
-        profile_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            profile_dir = self.profiles_dir / "firefox"
+            profile_dir.mkdir(parents=True, exist_ok=True)
 
-        # Some user prefs
-        firefox_prefs = {
-            'browser.privatebrowsing.autostart': False,
-            'network.cookie.cookieBehavior': 0  # 0=Accept all cookies
-        }
+            # Some user prefs
+            firefox_prefs = {
+                'browser.privatebrowsing.autostart': False,
+                'network.cookie.cookieBehavior': 0  # 0=Accept all cookies
+            }
 
-        self._log_info(f"Launching Firefox persistent profile at {profile_dir}")
-        context = await playwright.firefox.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            headless=self.headless,
-            args=["--no-sandbox"],
-            firefox_user_prefs=firefox_prefs
-        )
-        if context.pages:
-            page = context.pages[0]
-        else:
-            page = await context.new_page()
+            await self.logs_manager.info(f"Launching Firefox with persistent profile at {profile_dir}")
+            context = await playwright.firefox.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=self.headless,
+                args=["--no-sandbox"],
+                firefox_user_prefs=firefox_prefs
+            )
+            await self.logs_manager.info("Firefox context created successfully")
 
-        self._log_info("Firefox persistent context launched successfully")
-        return context, page
+            if context.pages:
+                page = context.pages[0]
+                await self.logs_manager.debug("Using existing page from context")
+            else:
+                page = await context.new_page()
+                await self.logs_manager.debug("Created new page in context")
+
+            await self.logs_manager.info("Firefox browser setup completed successfully")
+            return context, page
+        except Exception as e:
+            await self.logs_manager.error(f"Failed to launch Firefox: {str(e)}")
+            raise
 
     async def _launch_chromium_persistent(self, playwright) -> Tuple[BrowserContext, Page]:
         """Launch a persistent Edge/Chrome context with no incognito."""
-        profile_dir = self.profiles_dir / (self.browser_type or "chromium")
-        profile_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            profile_dir = self.profiles_dir / (self.browser_type or "chromium")
+            profile_dir.mkdir(parents=True, exist_ok=True)
 
-        # Launch arguments (remove --user-data-dir since it's passed as parameter)
-        launch_args = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage"
-        ]
-        ignore_args = [
-            "--enable-automation"
-        ]
+            await self.logs_manager.info(f"Launching {self.browser_type} with persistent profile at {profile_dir}")
 
-        context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),  # This is the correct way to pass user_data_dir
-            headless=self.headless,
-            args=launch_args,
-            ignore_default_args=ignore_args
-        )
-        
-        if context.pages:
-            page = context.pages[0]
-        else:
-            page = await context.new_page()
+            launch_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+            ignore_args = [
+                "--enable-automation"
+            ]
 
-        self._log_info("Chromium-based persistent context launched successfully")
-        return context, page
+            context = await playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=self.headless,
+                args=launch_args,
+                ignore_default_args=ignore_args
+            )
+            await self.logs_manager.info(f"{self.browser_type} context created successfully")
+
+            if context.pages:
+                page = context.pages[0]
+                await self.logs_manager.debug("Using existing page from context")
+            else:
+                page = await context.new_page()
+                await self.logs_manager.debug("Created new page in context")
+
+            await self.logs_manager.info(f"{self.browser_type} browser setup completed successfully")
+            return context, page
+        except Exception as e:
+            await self.logs_manager.error(f"Failed to launch {self.browser_type}: {str(e)}")
+            raise
 
     async def initialize(self, attach_existing: bool = False) -> Tuple[Union[Browser, BrowserContext], Page]:
         """
@@ -199,12 +221,13 @@ class BrowserSetup:
         Returns (browser_or_context, page).
         If attach_existing=True, attempt to connect to an existing session (Edge/Chrome).
         """
-        self._log_info("Initializing browser setup...")
+        await self._log_info("Initializing browser setup...")
 
         # Possibly prompt user for choice
         should_prompt = self.settings.get('should_prompt', True)
         if should_prompt or not self.settings.get('type'):
-            self._log_info("Prompting user for browser selection")
+            await self.logs_manager.info("Browser selection required - prompting user")
+            # We keep these prints since they are part of the user interface prompt
             print("\nSelect Browser:")
             print("1) Edge (recommended)")
             print("2) Chrome")
@@ -228,35 +251,37 @@ class BrowserSetup:
                         self.browser_type = 'chrome'
                         attach_existing = True
                     else:
+                        await self.logs_manager.warning(f"Invalid browser choice: {choice}")
                         print("Invalid choice. Please try again.")
                         continue
                     break
                 except Exception as e:
+                    await self.logs_manager.error(f"Error during browser selection: {str(e)}")
                     print(f"Error during input: {e}. Please try again.")
         else:
             self.browser_type = self.settings.get('type')
             attach_existing = self.settings.get('attach_existing', attach_existing)
 
-        self._log_info(f"Selected browser type: {self.browser_type}")
-        self._log_info(f"Attach existing: {attach_existing}")
+        await self._log_info(f"Selected browser type: {self.browser_type}")
+        await self._log_info(f"Attach existing: {attach_existing}")
 
         # Derive executable path
         self.executable_path = self._get_browser_path()
         if self.executable_path:
-            self._log_info(f"Using executable path: {self.executable_path}")
+            await self._log_info(f"Using executable path: {self.executable_path}")
         else:
-            self._log_info("No explicit executable path found or not required")
+            await self._log_info("No explicit executable path found or not required")
 
         # Start Playwright
         playwright = await async_playwright().start()
 
         try:
             if attach_existing:
-                self._log_info("Attaching to existing browser session...")
+                await self._log_info("Attaching to existing browser session...")
                 # For attach, we get a Browser instance
                 browser = await self._attach_to_browser(playwright)
                 page = await browser.new_page()
-                self._log_info("Attached successfully, created new page.")
+                await self._log_info("Attached successfully, created new page.")
                 await self._configure_page(page)
                 await self.telemetry.track_browser_setup(
                     browser_type=self.browser_type,
@@ -288,7 +313,7 @@ class BrowserSetup:
                 raise ValueError(f"Unsupported browser type: {self.browser_type}")
 
         except Exception as e:
-            self._log_info(f"Browser initialization failed: {e}")
+            await self._log_info(f"Browser initialization failed: {e}")
             await playwright.stop()
             await self.telemetry.track_browser_setup(
                 browser_type=self.browser_type,
@@ -300,44 +325,60 @@ class BrowserSetup:
 
     async def _configure_page(self, page: Page):
         """Configure page settings (viewport, user agent, cookies)."""
-        self._log_info("Configuring page settings...")
+        try:
+            await self.logs_manager.info("Configuring page settings...")
 
-        # Set viewport if desired
-        w = self.viewport.get('width', 1280)
-        h = self.viewport.get('height', 720)
-        await page.set_viewport_size({'width': w, 'height': h})
+            # Set viewport if desired
+            w = self.viewport.get('width', 1280)
+            h = self.viewport.get('height', 720)
+            await page.set_viewport_size({'width': w, 'height': h})
+            await self.logs_manager.debug(f"Viewport set to {w}x{h}")
 
-        # Set user agent if any
-        if self.user_agent:
-            await page.set_extra_http_headers({'User-Agent': self.user_agent})
+            # Set user agent if any
+            if self.user_agent:
+                await page.set_extra_http_headers({'User-Agent': self.user_agent})
+                await self.logs_manager.debug(f"User agent set to: {self.user_agent}")
 
-        # Attempt to load cookies
-        if self.cookies_path.exists():
-            try:
-                cookies = json.loads(self.cookies_path.read_text())
-                if cookies:
-                    await page.context.add_cookies(cookies)
-                    self._log_info(f"Loaded {len(cookies)} cookies from {self.cookies_path}")
-            except Exception as e:
-                self._log_info(f"Error loading cookies: {e}")
+            # Attempt to load cookies
+            if self.cookies_path.exists():
+                try:
+                    cookies = json.loads(self.cookies_path.read_text())
+                    if cookies:
+                        await page.context.add_cookies(cookies)
+                        await self.logs_manager.info(f"Loaded {len(cookies)} cookies from {self.cookies_path}")
+                except Exception as e:
+                    await self.logs_manager.error(f"Error loading cookies: {str(e)}")
+            else:
+                await self.logs_manager.debug("No cookies file found - starting with fresh session")
+
+            await self.logs_manager.info("Page configuration completed")
+        except Exception as e:
+            await self.logs_manager.error(f"Error during page configuration: {str(e)}")
+            raise
 
     async def save_cookies(self, page: Page):
         """Save cookies for future sessions."""
         try:
+            await self.logs_manager.info("Saving browser cookies...")
             cookies = await page.context.cookies()
             self.cookies_path.write_text(json.dumps(cookies, indent=2))
-            self._log_info(f"Saved {len(cookies)} cookies to {self.cookies_path}")
+            await self.logs_manager.info(f"Successfully saved {len(cookies)} cookies to {self.cookies_path}")
         except Exception as e:
-            self._log_info(f"Error saving cookies: {e}")
+            await self.logs_manager.error(f"Failed to save cookies: {str(e)}")
+            raise
 
     async def cleanup(self, browser_or_context: Union[Browser, BrowserContext], page: Page):
         """Clean up browser resources, persisting cookies if possible."""
         try:
+            await self.logs_manager.info("Starting browser cleanup...")
             await self.save_cookies(page)
-            # If we have a persistent context, it has a .close() method
+            
             if hasattr(browser_or_context, 'close'):
+                await self.logs_manager.info("Closing browser/context...")
                 await browser_or_context.close()
+                await self.logs_manager.info("Browser cleanup completed successfully")
             else:
-                self._log_info("Unknown object type, cannot close properly.")
+                await self.logs_manager.warning("Unknown browser object type, cannot close properly")
         except Exception as e:
-            self._log_info(f"Error during browser cleanup: {e}")
+            await self.logs_manager.error(f"Error during browser cleanup: {str(e)}")
+            raise
