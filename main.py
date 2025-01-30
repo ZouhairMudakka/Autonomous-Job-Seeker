@@ -1,5 +1,5 @@
 """
-Main Entry Point for the LinkedIn Automation Tool (MVP)
+AI-Powered Job Application Automation System
 
 This file sets up:
 1) Configuration & logs
@@ -10,9 +10,13 @@ This file sets up:
 6) The commented MinimalGUI approach if user picks GUI (placeholder)
 
 Future expansions:
-- Incorporate concurrency for multiple tasks in parallel.
+- Incorporate concurrency for multiple tasks in parallel
 - Build the actual MinimalGUI logic in ui/minimal_gui.py
-- Possibly handle OS signals (Ctrl+C) for graceful shutdown
+- Integrate with multiple job platforms beyond LinkedIn
+- Enhance AI-driven decision making for job matching
+- Implement advanced resume parsing and customization
+- Add automated interview preparation features
+- Develop job market analysis capabilities
 """
 
 import sys
