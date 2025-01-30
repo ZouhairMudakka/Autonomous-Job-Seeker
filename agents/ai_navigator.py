@@ -52,6 +52,7 @@ from agents.form_filler_agent import FormFillerAgent
 from agents.user_profile_agent import UserProfileAgent
 from agents.tracker_agent import TrackerAgent
 from constants import TimingConstants
+from agents.cv_parser_agent import CVParserAgent
 
 @dataclass
 class NavigationMetrics:
@@ -89,6 +90,7 @@ class AINavigator:
         self.form_filler_agent = FormFillerAgent(self.dom_service, logs_manager, settings)
         self.user_profile_agent = UserProfileAgent(settings, logs_manager)
         self.tracker_agent = TrackerAgent(settings, logs_manager)
+        self.cv_parser = CVParserAgent(settings, logs_manager)
 
     async def navigate(self, action, context) -> Tuple[bool, float]:
         """
