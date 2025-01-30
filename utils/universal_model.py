@@ -37,6 +37,7 @@ import logging
 from typing import List, Dict, Any, Optional
 import openai
 from datetime import datetime
+from storage.logs_manager import LogsManager
 
 
 class ModelSelector:
@@ -105,8 +106,9 @@ class ModelSelector:
         "meta-llama/llama-3.2-90b-instruct": {"input": 64000, "output": 4096}
     }
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, logs_manager: LogsManager):
+        """Initialize ModelSelector with a LogsManager instance for async logging."""
+        self.logs_manager = logs_manager
 
         # Load environment variables
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
@@ -118,9 +120,6 @@ class ModelSelector:
         # Default to standard OpenAI settings (can override in calls)
         openai.api_key = self.openai_api_key
         openai.api_base = "https://api.openai.com/v1"
-
-        # Validate environment variables
-        self._validate_env_vars()
 
         # Optionally store custom token limits at runtime
         self.custom_token_limits = {}
@@ -134,47 +133,78 @@ You can explain how these features work and help users make the most of them."""
         self.chat_max_history = 50  # Maximum number of messages to keep in history
         self.chat_max_context = 10  # Maximum number of messages to include in context window
 
-    def _validate_env_vars(self):
-        if not self.openai_api_key:
-            self.logger.warning("OPENAI_API_KEY not set. Standard OpenAI models won't function.")
-        if not self.deepseek_api_key:
-            self.logger.warning("DEEPSEEK_API_KEY not set. DeepSeek models won't function.")
-        if not self.model_box_api_key:
-            self.logger.warning("MODEL_BOX_API_KEY not set. Model Box models won't function.")
+    async def initialize(self):
+        """Async initialization that should be called after creating the ModelSelector instance."""
+        await self.logs_manager.info("Initializing ModelSelector...")
+        await self._validate_env_vars()
+        await self.logs_manager.info("ModelSelector initialization complete.")
 
-    def set_token_limits(self, model: str, input_limit: int = None, output_limit: int = None):
+    async def _validate_env_vars(self):
+        """Validate that required environment variables are set."""
+        if not self.openai_api_key:
+            await self.logs_manager.warning("OPENAI_API_KEY not set. Standard OpenAI models won't function.")
+        if not self.deepseek_api_key:
+            await self.logs_manager.warning("DEEPSEEK_API_KEY not set. DeepSeek models won't function.")
+        if not self.model_box_api_key:
+            await self.logs_manager.warning("MODEL_BOX_API_KEY not set. Model Box models won't function.")
+
+    async def set_token_limits(self, model: str, input_limit: int = None, output_limit: int = None):
         """
         Override default token limits for a specific model at runtime.
         """
         if model not in self.custom_token_limits:
             self.custom_token_limits[model] = {}
+            await self.logs_manager.debug(f"Creating new token limit entry for model: {model}")
 
+        old_limits = self.custom_token_limits.get(model, {})
         if input_limit is not None:
             self.custom_token_limits[model]["input"] = input_limit
+            await self.logs_manager.info(f"Updated input token limit for {model}: {input_limit} (was: {old_limits.get('input', 'not set')})")
         if output_limit is not None:
             self.custom_token_limits[model]["output"] = output_limit
+            await self.logs_manager.info(f"Updated output token limit for {model}: {output_limit} (was: {old_limits.get('output', 'not set')})")
 
-    def get_token_limits(self, model: str) -> Dict[str, int]:
+    async def get_token_limits(self, model: str) -> Dict[str, int]:
         """
         Retrieve token limits, preferring custom overrides if available.
         """
         default_limits = {"input": 4000, "output": 2000}
         base_limits = self.DEFAULT_TOKEN_LIMITS.get(model, default_limits)
         overrides = self.custom_token_limits.get(model, {})
-        return {
+        
+        result = {
             "input": overrides.get("input", base_limits["input"]),
             "output": overrides.get("output", base_limits["output"])
         }
+        
+        if model not in self.DEFAULT_TOKEN_LIMITS:
+            await self.logs_manager.warning(f"Using default token limits for unknown model: {model}")
+        if overrides:
+            await self.logs_manager.debug(f"Using custom token limits for {model}: {result}")
+        else:
+            await self.logs_manager.debug(f"Using base token limits for {model}: {result}")
+            
+        return result
 
-    def supports_vision(self, model: str) -> bool:
+    async def supports_vision(self, model: str) -> bool:
         """Check if a model supports vision capabilities."""
-        return model in self.VISION_MODELS
+        supports = model in self.VISION_MODELS
+        if supports:
+            await self.logs_manager.debug(f"Model {model} supports vision: {self.VISION_MODELS[model]}")
+        else:
+            await self.logs_manager.debug(f"Model {model} does not support vision capabilities")
+        return supports
 
-    def get_vision_capabilities(self, model: str) -> str:
+    async def get_vision_capabilities(self, model: str) -> str:
         """Get description of a model's vision features."""
-        return self.VISION_MODELS.get(model, "No vision capabilities for this model.")
+        capabilities = self.VISION_MODELS.get(model, "No vision capabilities for this model.")
+        if model in self.VISION_MODELS:
+            await self.logs_manager.debug(f"Retrieved vision capabilities for {model}: {capabilities}")
+        else:
+            await self.logs_manager.debug(f"No vision capabilities found for model: {model}")
+        return capabilities
 
-    def chat_completion(self,
+    async def chat_completion(self,
                         messages: List[Dict[str, str]],
                         model: str = None,
                         max_tokens: Optional[int] = None,
@@ -201,11 +231,11 @@ You can explain how these features work and help users make the most of them."""
                 model = self.DEFAULT_VISION_MODEL
             else:
                 model = self.DEFAULT_TEXT_MODEL
-            self.logger.info(f"No model provided; using default: {model}")
+            await self.logs_manager.info(f"No model provided; using default: {model}")
 
         # Check vision support
-        if vision_required and not self.supports_vision(model):
-            self.logger.warning(f"Model {model} does not support vision. Switching to {self.DEFAULT_VISION_MODEL}")
+        if vision_required and not await self.supports_vision(model):
+            await self.logs_manager.warning(f"Model {model} does not support vision. Switching to {self.DEFAULT_VISION_MODEL}")
             model = self.DEFAULT_VISION_MODEL
 
         # Determine token limits
@@ -214,61 +244,77 @@ You can explain how these features work and help users make the most of them."""
             max_tokens = token_limits["output"]
         kwargs["max_tokens"] = max_tokens
 
-        # Decide which method to call
-        if model in self.OPENAI_MODELS:
-            return self._call_standard_openai_api(model, messages, return_full_response, **kwargs)
-        elif model in self.DEEPSEEK_MODELS:
-            return self._call_deepseek_api(model, messages, return_full_response, **kwargs)
-        elif any(model.startswith(prefix) for prefix in ["deepseek/", "google/", "openai/", "meta-llama/", "qwen/", "anthropic/"]):
-            return self._call_model_box_api(model, messages, return_full_response, **kwargs)
-        else:
-            err_msg = f"Unsupported model: {model}"
-            self.logger.error(err_msg)
-            return err_msg
+        await self.logs_manager.debug(f"Starting chat completion with model: {model}")
 
-    def _call_standard_openai_api(self, model: str, messages: List[Dict[str, str]],
+        # Decide which method to call
+        try:
+            if model in self.OPENAI_MODELS:
+                return await self._call_standard_openai_api(model, messages, return_full_response, **kwargs)
+            elif model in self.DEEPSEEK_MODELS:
+                return await self._call_deepseek_api(model, messages, return_full_response, **kwargs)
+            elif any(model.startswith(prefix) for prefix in ["deepseek/", "google/", "openai/", "meta-llama/", "qwen/", "anthropic/"]):
+                return await self._call_model_box_api(model, messages, return_full_response, **kwargs)
+            else:
+                err_msg = f"Unsupported model: {model}"
+                await self.logs_manager.error(err_msg)
+                return err_msg
+        except Exception as e:
+            error_msg = f"Error in chat completion: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            return error_msg
+
+    async def _call_standard_openai_api(self, model: str, messages: List[Dict[str, str]],
                                   return_full_response: bool,
                                   **kwargs) -> Any:
         """
         Calls the standard OpenAI ChatCompletion (api_base=https://api.openai.com/v1)
         """
         if not self.openai_api_key:
-            return "Error: OPENAI_API_KEY not set, cannot call standard OpenAI."
+            error_msg = "Error: OPENAI_API_KEY not set, cannot call standard OpenAI."
+            await self.logs_manager.error(error_msg)
+            return error_msg
 
+        await self.logs_manager.debug("Setting up standard OpenAI API configuration")
         openai.api_key = self.openai_api_key
         openai.api_base = "https://api.openai.com/v1"
 
-        return self._call_openai_api(model, messages, return_full_response, **kwargs)
+        return await self._call_openai_api(model, messages, return_full_response, **kwargs)
 
-    def _call_deepseek_api(self, model: str, messages: List[Dict[str, str]],
+    async def _call_deepseek_api(self, model: str, messages: List[Dict[str, str]],
                            return_full_response: bool,
                            **kwargs) -> Any:
         """
         Calls the DeepSeek endpoint using openai library but overriding api_base/ api_key
         """
         if not self.deepseek_api_key:
-            return f"Error: DEEPSEEK_API_KEY not set, cannot call {model}."
+            error_msg = f"Error: DEEPSEEK_API_KEY not set, cannot call {model}."
+            await self.logs_manager.error(error_msg)
+            return error_msg
 
+        await self.logs_manager.debug("Setting up DeepSeek API configuration")
         openai.api_key = self.deepseek_api_key
         openai.api_base = self.deepseek_endpoint
 
-        return self._call_openai_api(model, messages, return_full_response, **kwargs)
+        return await self._call_openai_api(model, messages, return_full_response, **kwargs)
 
-    def _call_model_box_api(self, model: str, messages: List[Dict[str, str]],
+    async def _call_model_box_api(self, model: str, messages: List[Dict[str, str]],
                             return_full_response: bool,
                             **kwargs) -> Any:
         """
         Calls the Model Box endpoint (api_base=self.model_box_endpoint) with model_box_api_key
         """
         if not self.model_box_api_key:
-            return f"Error: MODEL_BOX_API_KEY not set, cannot call {model}."
+            error_msg = f"Error: MODEL_BOX_API_KEY not set, cannot call {model}."
+            await self.logs_manager.error(error_msg)
+            return error_msg
 
+        await self.logs_manager.debug("Setting up Model Box API configuration")
         openai.api_key = self.model_box_api_key
         openai.api_base = self.model_box_endpoint
 
-        return self._call_openai_api(model, messages, return_full_response, **kwargs)
+        return await self._call_openai_api(model, messages, return_full_response, **kwargs)
 
-    def _call_openai_api(self, 
+    async def _call_openai_api(self, 
                          model: str, 
                          messages: List[Dict[str, str]], 
                          return_full_response: bool,
@@ -278,33 +324,87 @@ You can explain how these features work and help users make the most of them."""
         after being set by the calling method. Minimizes duplication.
         """
         try:
+            await self.logs_manager.debug(f"Making API call to model: {model}")
+            await self.logs_manager.debug(f"Request parameters: model={model}, return_full_response={return_full_response}, kwargs={kwargs}")
+            
+            # Log message count and structure (without content for privacy)
+            msg_structure = [{"role": m["role"]} for m in messages]
+            await self.logs_manager.debug(f"Sending {len(messages)} messages with structure: {msg_structure}")
+            
+            start_time = datetime.now()
             response = openai.ChatCompletion.create(
                 model=model,
                 messages=messages,
                 **kwargs
             )
+            duration = (datetime.now() - start_time).total_seconds()
+            
+            # Log response metadata
+            token_usage = getattr(response, 'usage', None)
+            if token_usage:
+                await self.logs_manager.info(
+                    f"API call successful - Model: {model}, "
+                    f"Duration: {duration:.2f}s, "
+                    f"Tokens: {token_usage.total_tokens} "
+                    f"(prompt: {token_usage.prompt_tokens}, "
+                    f"completion: {token_usage.completion_tokens})"
+                )
+            else:
+                await self.logs_manager.info(f"API call successful - Model: {model}, Duration: {duration:.2f}s")
+            
             if return_full_response:
                 return response
             else:
-                return response.choices[0].message.content
+                content = response.choices[0].message.content
+                await self.logs_manager.debug(f"Returning content of length: {len(content)} characters")
+                return content
+                
+        except openai.error.RateLimitError as e:
+            error_msg = f"Rate limit exceeded for {model}: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            await self.logs_manager.warning("Consider implementing rate limiting or switching to a different model")
+            return error_msg
+            
+        except openai.error.InvalidRequestError as e:
+            error_msg = f"Invalid request to {model}: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            await self.logs_manager.debug(f"Request details that caused error - model: {model}, kwargs: {kwargs}")
+            return error_msg
+            
+        except openai.error.AuthenticationError as e:
+            error_msg = f"Authentication failed for {model}: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            await self.logs_manager.warning("Check if API key is valid and has required permissions")
+            return error_msg
+            
         except Exception as e:
-            self.logger.error(f"Error calling {model} with openai library: {str(e)}")
-            return f"Error calling {model}: {str(e)}"
+            error_msg = f"Unexpected error calling {model}: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            await self.logs_manager.error(f"Full error details: {type(e).__name__}: {str(e)}")
+            return error_msg
 
-    def vision_completion(self, model: str, image: bytes, prompt: str) -> str:
+    async def vision_completion(self, model: str, image: bytes, prompt: str) -> str:
         """
         Process an image with a vision model through ModelBox.
         """
         if not isinstance(image, bytes) or len(image) == 0:
-            return "Error: Invalid image data - must be non-empty bytes"
+            error_msg = "Error: Invalid image data - must be non-empty bytes"
+            await self.logs_manager.error(error_msg)
+            return error_msg
         
         if not prompt or not isinstance(prompt, str):
-            return "Error: Prompt must be a non-empty string"
+            error_msg = "Error: Prompt must be a non-empty string"
+            await self.logs_manager.error(error_msg)
+            return error_msg
 
         client = None
         try:
             if not self.model_box_api_key:
-                return "Error: MODEL_BOX_API_KEY not set"
+                error_msg = "Error: MODEL_BOX_API_KEY not set"
+                await self.logs_manager.error(error_msg)
+                return error_msg
+
+            await self.logs_manager.info(f"Starting vision completion with model: {model}")
 
             # Configure OpenAI client for ModelBox with correct endpoint
             client = openai.Client(
@@ -315,6 +415,8 @@ You can explain how these features work and help users make the most of them."""
             # Convert image to base64
             import base64
             image_b64 = base64.b64encode(image).decode('utf-8')
+
+            await self.logs_manager.debug("Image encoded, preparing API call")
 
             # Create the messages array with image
             messages = [
@@ -336,29 +438,34 @@ You can explain how these features work and help users make the most of them."""
             ]
 
             # Make the API call using the new client interface
+            await self.logs_manager.debug("Making vision API call")
             response = client.chat.completions.create(
                 model=model,
                 messages=messages
             )
+            await self.logs_manager.info("Vision completion successful")
 
             return response.choices[0].message.content
 
         except Exception as e:
-            self.logger.error(f"Error in vision completion: {str(e)}")
-            return f"Error processing image with vision model: {str(e)}"
+            error_msg = f"Error in vision completion: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            return error_msg
         finally:
             # Ensure proper cleanup
             if client is not None:
                 try:
                     client.close()
+                    await self.logs_manager.debug("Vision API client closed")
                 except Exception as e:
-                    self.logger.warning(f"Error closing client: {str(e)}")
+                    await self.logs_manager.warning(f"Error closing client: {str(e)}")
 
-    def format_chat_messages(self, messages: List[Dict[str, Any]], include_system_prompt: bool = True) -> List[Dict[str, str]]:
+    async def format_chat_messages(self, messages: List[Dict[str, Any]], include_system_prompt: bool = True) -> List[Dict[str, str]]:
         """
         Format chat messages for the model, optionally including the system prompt.
         Specifically designed for GUI chat integration.
         """
+        await self.logs_manager.debug(f"Formatting {len(messages)} messages for chat")
         formatted_messages = []
         
         if include_system_prompt:
@@ -366,13 +473,19 @@ You can explain how these features work and help users make the most of them."""
                 "role": "system",
                 "content": self.chat_system_prompt
             })
+            await self.logs_manager.debug("Added system prompt to messages")
             
         # Add the most recent messages within context window
-        formatted_messages.extend(messages[-self.chat_max_context:])
+        context_messages = messages[-self.chat_max_context:]
+        formatted_messages.extend(context_messages)
         
+        if len(messages) > self.chat_max_context:
+            await self.logs_manager.debug(f"Truncated {len(messages) - self.chat_max_context} older messages to fit context window")
+        
+        await self.logs_manager.debug(f"Final message count: {len(formatted_messages)} (including system prompt: {include_system_prompt})")
         return formatted_messages
 
-    def get_chat_response(self,
+    async def get_chat_response(self,
                          messages: List[Dict[str, Any]],
                          model: str = None,
                          temperature: float = 0.7,
@@ -386,17 +499,20 @@ You can explain how these features work and help users make the most of them."""
             # Use default model if none specified
             if model is None:
                 model = self.DEFAULT_TEXT_MODEL
+                await self.logs_manager.info(f"Using default model for chat: {model}")
 
+            await self.logs_manager.debug("Formatting chat messages with system prompt")
             # Format messages with system prompt
-            formatted_messages = self.format_chat_messages(messages)
+            formatted_messages = await self.format_chat_messages(messages)
             
             # Get token limits for the model
             token_limits = self.get_token_limits(model)
             if max_tokens is None:
                 max_tokens = token_limits["output"]
 
+            await self.logs_manager.debug(f"Getting chat response with model {model}")
             # Get response from model
-            response = self.chat_completion(
+            response = await self.chat_completion(
                 messages=formatted_messages,
                 model=model,
                 max_tokens=max_tokens,
@@ -418,10 +534,12 @@ You can explain how these features work and help users make the most of them."""
                 }
             }
 
+            await self.logs_manager.debug(f"Chat response received, tokens used: {result['metadata']['token_count']}")
             return result
 
         except Exception as e:
-            self.logger.error(f"Error in get_chat_response: {str(e)}")
+            error_msg = f"Error in get_chat_response: {str(e)}"
+            await self.logs_manager.error(error_msg)
             return {
                 "content": f"Error: {str(e)}",
                 "model": model,
@@ -459,22 +577,31 @@ You can explain how these features work and help users make the most of them."""
             # Use default model if none specified
             if model is None:
                 model = self.DEFAULT_TEXT_MODEL
+                await self.logs_manager.info(f"Using default model for streaming chat: {model}")
 
+            await self.logs_manager.debug("Formatting messages with system prompt for streaming")
             # Format messages with system prompt
-            formatted_messages = self.format_chat_messages(messages)
+            formatted_messages = await self.format_chat_messages(messages)
             
             # Get token limits for the model
-            token_limits = self.get_token_limits(model)
+            token_limits = await self.get_token_limits(model)
             if max_tokens is None:
                 max_tokens = token_limits["output"]
+                await self.logs_manager.debug(f"Using default max_tokens from model limits: {max_tokens}")
 
             # Start streaming response
             full_content = ""
             start_time = datetime.now()
+            chunk_count = 0
+            total_chars = 0
+            
+            await self.logs_manager.info(f"Starting streaming response from model {model} with temperature={temperature}")
             
             # Set up streaming parameters
             kwargs['stream'] = True
-            response_stream = self.chat_completion(
+            await self.logs_manager.debug(f"Stream parameters: {kwargs}")
+            
+            response_stream = await self.chat_completion(
                 messages=formatted_messages,
                 model=model,
                 max_tokens=max_tokens,
@@ -484,16 +611,34 @@ You can explain how these features work and help users make the most of them."""
             )
 
             # Process the stream
+            await self.logs_manager.debug("Beginning to process response stream")
+            last_progress_log = start_time
+            
             async for chunk in response_stream:
                 if hasattr(chunk.choices[0], 'delta') and hasattr(chunk.choices[0].delta, 'content'):
                     content = chunk.choices[0].delta.content
                     if content:
+                        chunk_count += 1
+                        total_chars += len(content)
                         full_content += content
+                        
+                        # Log progress every 2 seconds
+                        current_time = datetime.now()
+                        if (current_time - last_progress_log).total_seconds() >= 2:
+                            await self.logs_manager.debug(
+                                f"Streaming progress - Chunks: {chunk_count}, "
+                                f"Characters: {total_chars}, "
+                                f"Duration: {(current_time - start_time).total_seconds():.1f}s"
+                            )
+                            last_progress_log = current_time
+                        
                         if chunk_callback:
                             await chunk_callback(content)
 
             # Prepare final result with metadata
             end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
             result = {
                 "content": full_content,
                 "model": model,
@@ -502,25 +647,44 @@ You can explain how these features work and help users make the most of them."""
                     "model_name": model,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
-                    "response_time": (end_time - start_time).total_seconds()
+                    "response_time": duration,
+                    "total_chunks": chunk_count,
+                    "total_characters": total_chars,
+                    "characters_per_second": total_chars / duration if duration > 0 else 0
                 }
             }
 
+            await self.logs_manager.info(
+                f"Streaming complete - "
+                f"Duration: {duration:.1f}s, "
+                f"Chunks: {chunk_count}, "
+                f"Characters: {total_chars}, "
+                f"Speed: {result['metadata']['characters_per_second']:.1f} chars/sec"
+            )
             return result
 
         except Exception as e:
-            self.logger.error(f"Error in stream_chat_response: {str(e)}")
+            error_msg = f"Error in stream_chat_response: {str(e)}"
+            await self.logs_manager.error(error_msg)
+            await self.logs_manager.error(f"Full error details: {type(e).__name__}: {str(e)}")
+            
             error_result = {
                 "content": f"Error: {str(e)}",
                 "model": model,
                 "timestamp": datetime.now().isoformat(),
                 "metadata": {
                     "error": str(e),
+                    "error_type": type(e).__name__,
                     "model_name": model
                 }
             }
+            
             if chunk_callback:
-                await chunk_callback(error_result["content"])
+                try:
+                    await chunk_callback(error_result["content"])
+                except Exception as callback_error:
+                    await self.logs_manager.error(f"Error in chunk callback: {str(callback_error)}")
+                    
             return error_result
 
     def export_chat_history(self, history: List[Dict[str, Any]], format: str = "txt") -> bytes:
