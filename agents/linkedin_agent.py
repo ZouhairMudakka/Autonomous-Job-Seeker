@@ -160,14 +160,11 @@ from typing import Dict, Optional, Any, List
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 from constants import TimingConstants, Selectors, Messages
 from time import perf_counter
-import logging
+from storage.logs_manager import LogsManager
 
 # We'll also import your GeneralAgent or FormFillerAgent if needed:
 # from agents.general_agent import GeneralAgent
 # from agents.form_filler_agent import FormFillerAgent
-
-logger = logging.getLogger("LinkedInAgent")
-logger.setLevel(logging.INFO)
 
 class LinkedInAgent:
     def __init__(
@@ -188,6 +185,7 @@ class LinkedInAgent:
         """
         self.page = page
         self.controller = controller
+        self.logs_manager = controller.logs_manager
         self.default_timeout = min(default_timeout, TimingConstants.MAX_WAIT_TIME)
         self.min_delay = min_delay
         self.max_delay = max_delay
@@ -198,12 +196,14 @@ class LinkedInAgent:
 
     async def pause(self):
         """Pause the agent's operations."""
-        print(f"[LinkedInAgent] {Messages.PAUSE_MESSAGE}")
+        await self._log_state_change("running", "paused", "User requested pause")
+        await self._log_info(Messages.PAUSE_MESSAGE)
         self.is_paused = True
 
     async def resume(self):
         """Resume the agent's operations."""
-        print(f"[LinkedInAgent] {Messages.RESUME_MESSAGE}")
+        await self._log_state_change("paused", "running", "User requested resume")
+        await self._log_info(Messages.RESUME_MESSAGE)
         self.is_paused = False
 
     async def _check_if_paused(self):
@@ -215,7 +215,7 @@ class LinkedInAgent:
                 if asyncio.current_task().cancelled():
                     raise asyncio.CancelledError()
             except asyncio.CancelledError:
-                print("[LinkedInAgent] Operation cancelled while paused")
+                await self._log_state_change("paused", "cancelled", "Operation cancelled while paused")
                 raise
 
     async def _verify_url_is_jobs(self) -> bool:
@@ -235,37 +235,101 @@ class LinkedInAgent:
             
             return any(pattern in current_url for pattern in jobs_patterns)
         except Exception as e:
-            self._log_info(f"Error checking URL: {e}")
+            await self._log_error(f"Error checking URL: {e}")
             return False
+
+    async def _log_navigation(self, from_url: str, to_url: str, method: str = None, success: bool = True, error: Exception = None):
+        """Log page navigation attempts and results"""
+        nav_msg = f"Navigation: {from_url} -> {to_url}"
+        if method:
+            nav_msg += f" | Method: {method}"
+        if error:
+            nav_msg += f" | Error: {str(error)}"
+        
+        if success:
+            await self._log_info(nav_msg)
+        else:
+            await self._log_error(nav_msg)
+
+    async def _log_selector_strategy(self, element_type: str, selectors: list, successful_selector: str = None, context: dict = None):
+        """Log selector strategy attempts and results"""
+        strategy_msg = f"Selector Strategy for '{element_type}'"
+        if context:
+            strategy_msg += f" | Context: {context}"
+        await self._log_debug(strategy_msg)
+        
+        # Log all attempted selectors
+        for selector in selectors:
+            status = "✓" if selector == successful_selector else "✗"
+            await self._log_debug(f"  {status} Tried: {selector}")
+        
+        if successful_selector:
+            await self._log_info(f"Found {element_type} with: {successful_selector}")
+        else:
+            await self._log_warning(f"Failed to find {element_type} after trying {len(selectors)} selectors")
 
     async def go_to_jobs_tab(self):
         """Click the 'Jobs' button in the top LinkedIn nav bar or navigate directly as fallback."""
         try:
+            current_url = self.page.url
             # First check if we're already on a jobs page
             if await self._verify_url_is_jobs():
-                self._log_info("Already on a LinkedIn jobs page")
+                await self._log_info("Already on a LinkedIn jobs page")
                 return True
             
-            self._log_info("Attempting to navigate to Jobs tab...")
+            await self._log_info("Attempting to navigate to Jobs tab...")
             
             # Try clicking the jobs tab first with improved visibility handling
             try:
+                # Track navigation attempt
+                await self._log_navigation(
+                    from_url=current_url,
+                    to_url="linkedin.com/jobs",
+                    method="jobs_tab_click"
+                )
+                
+                # Define selectors for jobs tab
+                jobs_tab_selectors = [
+                    Selectors.LINKEDIN_JOBS_TAB,
+                    "a[href='/jobs/']",
+                    "a[data-link-to='jobs']",
+                    "a[href*='/jobs']"
+                ]
+                
                 # Get the jobs tab element
-                jobs_tab = await self.page.query_selector(Selectors.LINKEDIN_JOBS_TAB)
+                jobs_tab = None
+                successful_selector = None
+                
+                for selector in jobs_tab_selectors:
+                    try:
+                        jobs_tab = await self.page.query_selector(selector)
+                        if jobs_tab:
+                            successful_selector = selector
+                            break
+                    except Exception:
+                        continue
+                
+                await self._log_selector_strategy(
+                    element_type="jobs_tab",
+                    selectors=jobs_tab_selectors,
+                    successful_selector=successful_selector,
+                    context={"current_url": current_url}
+                )
+                
                 if jobs_tab:
                     # First ensure it's in view
                     try:
                         await jobs_tab.scroll_into_view_if_needed()
                         await self._human_delay(0.5, 1)  # Brief pause after scroll
                     except Exception as e:
-                        self._log_info(f"Scroll into view failed: {e}")
+                        await self._log_error("Scroll into view failed", error=e)
 
                     # Try to hover first (can help with dynamic menus)
                     try:
                         await jobs_tab.hover()
                         await self._human_delay(0.3, 0.7)  # Brief pause after hover
                     except Exception as e:
-                        self._log_info(f"Hover failed: {e}")
+                        await self._log_error("Hover failed", error=e)
 
                     # Now attempt the click
                     await jobs_tab.click()
@@ -274,34 +338,61 @@ class LinkedInAgent:
                     try:
                         await self.page.wait_for_url("**/jobs/**", timeout=5000)
                         if await self._verify_url_is_jobs():
-                            self._log_info("Successfully navigated to Jobs page")
+                            await self._log_navigation(
+                                from_url=current_url,
+                                to_url=self.page.url,
+                                method="jobs_tab_click",
+                                success=True
+                            )
                             return True
                     except PlaywrightTimeoutError:
-                        self._log_info("URL didn't change to jobs page after click")
+                        await self._log_navigation(
+                            from_url=current_url,
+                            to_url=self.page.url,
+                            method="jobs_tab_click",
+                            success=False
+                        )
                 else:
-                    self._log_info("Jobs tab element not found")
+                    await self._log_info("Jobs tab element not found")
                 
             except Exception as e:
-                self._log_info(f"Failed to click jobs tab: {e}")
+                await self._log_error("Failed to click jobs tab", error=e)
 
             # If clicking failed, try direct URL navigation
-            self._log_info("Attempting direct navigation to jobs page...")
+            await self._log_info("Attempting direct navigation to jobs page...")
             try:
-                await self.page.goto("https://www.linkedin.com/jobs/", timeout=30000)
+                direct_url = "https://www.linkedin.com/jobs/"
+                await self._log_navigation(
+                    from_url=self.page.url,
+                    to_url=direct_url,
+                    method="direct_navigation"
+                )
+                
+                await self.page.goto(direct_url, timeout=30000)
                 await self._human_delay(2, 3)  # Give page time to load
                 
                 if await self._verify_url_is_jobs():
-                    self._log_info("Successfully navigated to Jobs page via direct URL")
+                    await self._log_navigation(
+                        from_url=current_url,
+                        to_url=self.page.url,
+                        method="direct_navigation",
+                        success=True
+                    )
                     return True
                 else:
-                    self._log_info("Direct URL navigation didn't land on jobs page")
+                    await self._log_navigation(
+                        from_url=current_url,
+                        to_url=self.page.url,
+                        method="direct_navigation",
+                        success=False
+                    )
             except Exception as e:
-                self._log_info(f"Direct URL navigation failed: {e}")
+                await self._log_error("Direct URL navigation failed", error=e)
                 
             raise Exception("Failed to navigate to Jobs page through any method")
             
         except Exception as e:
-            self._log_info(f"Error navigating to Jobs tab: {e}")
+            await self._log_error("Error navigating to Jobs tab", error=e)
             raise
 
     async def process_job_listings(self, max_jobs: int = 10):
@@ -318,15 +409,15 @@ class LinkedInAgent:
                 
                 if left_pane:
                     # Handle two-column layout (existing code remains the same)
-                    self._log_info("Processing two-column layout")
+                    await self._log_info("Processing two-column layout")
                     # ... existing two-column layout code ...
                 else:
                     # Try single feed layout
-                    self._log_info("Attempting to process single feed layout")
+                    await self._log_info("Attempting to process single feed layout")
                     jobs_data = await self._handle_single_feed_layout()
                     
                     if not jobs_data:
-                        self._log_info("No jobs found in either layout")
+                        await self._log_info("No jobs found in either layout")
                         break
                     
                     for job_data in jobs_data:
@@ -365,10 +456,10 @@ class LinkedInAgent:
                                 full_job_data["application_status"] = apply_status
                                 await self._save_job_record(full_job_data)
                             else:
-                                self._log_info("Job details failed to load")
+                                await self._log_info("Job details failed to load")
                                 
                         except Exception as e:
-                            self._log_info(f"Error processing job in single feed: {e}")
+                            await self._log_info(f"Error processing job in single feed: {e}")
                             continue
                     
                     # Check if we need to load more jobs
@@ -378,16 +469,16 @@ class LinkedInAgent:
                             await self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
                             await self._human_delay(2, 3)
                         except Exception as e:
-                            self._log_info(f"Error scrolling for more jobs: {e}")
+                            await self._log_info(f"Error scrolling for more jobs: {e}")
                             break
 
-            self._log_info(f"Finished processing {job_card_count} job listings")
+            await self._log_info(f"Finished processing {job_card_count} job listings")
             
         except asyncio.CancelledError:
-            self._log_info("Job processing cancelled gracefully")
+            await self._log_info("Job processing cancelled gracefully")
             raise
         except Exception as e:
-            self._log_info(f"Error in process_job_listings: {e}")
+            await self._log_info(f"Error in process_job_listings: {e}")
             raise
 
     # -------------------------------------------------------------------------
@@ -436,48 +527,71 @@ class LinkedInAgent:
         - Otherwise, see if there's a link to an external site.
         Returns a string: "applied", "redirected", "skipped", or "failed"
         """
-        print(f"[LinkedInAgent] Attempting to apply to {job_data['job_title']} at {job_data['company']}")
+        method = "_apply_to_job"
+        context = {
+            "job_title": job_data.get("job_title"),
+            "company": job_data.get("company"),
+            "is_easy_apply": job_data.get("is_easy_apply")
+        }
         
-        if job_data.get("is_easy_apply"):
-            print(f"[LinkedInAgent] Using Easy Apply for {job_data['job_title']}")
-            try:
-                result = await self._handle_easy_apply()
-                print(f"[LinkedInAgent] Easy Apply result: {result}")
-                return result
-            except Exception as e:
-                print(f"[LinkedInAgent] Failed easy apply: {e}")
-                return "failed"
-        else:
-            apply_button = await self.page.query_selector('a[data-control-name="jobdetails_topcard_inapply"]')
-            if apply_button:
-                print(f"[LinkedInAgent] External link apply for {job_data['job_title']}")
-                result = await self._handle_external_apply(apply_button)
-                print(f"[LinkedInAgent] External apply result: {result}")
-                return result
-            else:
-                print(f"[LinkedInAgent] No apply button found for {job_data['job_title']}, skipping.")
-                return "skipped"
+        await self._log_debug(f"Entering {method}", context)
+        
+        try:
+            async with self._timed_operation(method):
+                await self._log_info(f"Attempting to apply to {job_data['job_title']} at {job_data['company']}")
+                
+                if job_data.get("is_easy_apply"):
+                    await self._log_info(f"Using Easy Apply for {job_data['job_title']}")
+                    try:
+                        result = await self._handle_easy_apply()
+                        await self._log_outcome(method, result == "applied", f"Easy Apply result: {result}")
+                        return result
+                    except Exception as e:
+                        await self._log_error("Failed easy apply", error=e, context=context)
+                        return "failed"
+                else:
+                    apply_button = await self.page.query_selector('a[data-control-name="jobdetails_topcard_inapply"]')
+                    if apply_button:
+                        await self._log_info(f"External link apply for {job_data['job_title']}")
+                        result = await self._handle_external_apply(apply_button)
+                        await self._log_outcome(method, result == "redirected", f"External apply result: {result}")
+                        return result
+                    else:
+                        await self._log_info(f"No apply button found for {job_data['job_title']}, skipping.")
+                        return "skipped"
+                    
+        except Exception as e:
+            await self._log_error(f"Error in {method}", error=e, context=context)
+            return "failed"
 
     async def _handle_easy_apply(self) -> str:
         """
         Click "Easy Apply" and fill out the form with a FormFillerAgent or direct multi-step approach.
         """
-        easy_apply_btn_sel = 'button.jobs-apply-button'
+        method = "_handle_easy_apply"
+        context = {}
+        
+        await self._log_debug(f"Entering {method}", context)
+        
         try:
-            await self.page.click(easy_apply_btn_sel)
-            await asyncio.sleep(TimingConstants.EASY_APPLY_MODAL_DELAY)
+            async with self._timed_operation(method):
+                easy_apply_btn_sel = 'button.jobs-apply-button'
+                await self.page.click(easy_apply_btn_sel)
+                await asyncio.sleep(TimingConstants.EASY_APPLY_MODAL_DELAY)
 
-            # Initialize FormFillerAgent if needed
-            if not hasattr(self, 'form_filler_agent'):
-                from agents.form_filler_agent import FormFillerAgent
-                self.form_filler_agent = FormFillerAgent(page=self.page, default_wait=TimingConstants.DEFAULT_TIMEOUT)
+                # Initialize FormFillerAgent if needed
+                if not hasattr(self, 'form_filler_agent'):
+                    from agents.form_filler_agent import FormFillerAgent
+                    self.form_filler_agent = FormFillerAgent(page=self.page, default_wait=TimingConstants.DEFAULT_TIMEOUT)
 
-            result = await self._multi_step_easy_apply()
-            return result
+                result = await self._multi_step_easy_apply()
+                await self._log_outcome(method, result == "applied", f"Easy Apply result: {result}")
+                return result
         except PlaywrightTimeoutError:
+            await self._log_error("Timed out waiting for Easy Apply button", context=context)
             return "failed"
         except Exception as e:
-            print(f"[LinkedInAgent] Failed easy apply: {e}")
+            await self._log_error("Failed easy apply", error=e, context=context)
             return "failed"
 
     async def _multi_step_easy_apply(self) -> str:
@@ -485,11 +599,17 @@ class LinkedInAgent:
         Handle multi-step Easy Apply form filling.
         Returns 'applied' if successful, 'failed' otherwise.
         """
+        method = "_multi_step_easy_apply"
+        context = {}
+        
+        await self._log_debug(f"Entering {method}", context)
+        
         try:
             # Step 1: Upload CV if required
             upload_selector = 'input[type="file"][name="fileId"]'
             upload_input = await self.page.query_selector(upload_selector)
             if upload_input and hasattr(self, 'cv_path'):
+                await self._log_info("Uploading CV...")
                 await upload_input.set_input_files(self.cv_path)
                 await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
 
@@ -508,11 +628,11 @@ class LinkedInAgent:
                     await next_btn.click()
                     await asyncio.sleep(TimingConstants.FORM_FIELD_DELAY)
                 else:
-                    print("[LinkedInAgent] No next or submit button found.")
+                    await self._log_warning("No next or submit button found.", context=context)
                     return "failed"
 
         except Exception as e:
-            print(f"[LinkedInAgent] Multi-step easy apply failed: {e}")
+            await self._log_error("Multi-step easy apply failed", error=e, context=context)
             return "failed"
 
     async def _handle_external_apply(self, apply_button) -> str:
@@ -520,25 +640,45 @@ class LinkedInAgent:
         Clicking an external apply link might open a new tab or redirect in the same tab.
         We'll handle a new tab scenario, pass it off to a general agent, then close the tab.
         """
+        method = "_handle_external_apply"
+        context = {}
+        current_url = self.page.url
+        
+        await self._log_debug(f"Entering {method}", context)
+        
         try:
             [popup] = await asyncio.gather(
                 self.page.wait_for_event("popup"),
                 apply_button.click()
             )
             if popup:
-                print("[LinkedInAgent] A new tab opened for external application.")
+                popup_url = popup.url
+                await self._log_navigation(
+                    from_url=current_url,
+                    to_url=popup_url,
+                    method="popup_external_apply",
+                    success=True
+                )
+                await self._log_info("A new tab opened for external application.")
                 await popup.close()
                 return "redirected"
             else:
-                print("[LinkedInAgent] The same tab was redirected. Handle with general agent or skip for now.")
+                new_url = self.page.url
+                await self._log_navigation(
+                    from_url=current_url,
+                    to_url=new_url,
+                    method="same_tab_external_apply",
+                    success=True
+                )
+                await self._log_info("The same tab was redirected. Handle with general agent or skip for now.")
                 await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY)
                 await self.page.go_back()
                 return "redirected"
         except PlaywrightTimeoutError:
-            print("[LinkedInAgent] Timed out waiting for external apply popup.")
+            await self._log_warning("Timed out waiting for external apply popup.", context=context)
             return "failed"
         except Exception as e:
-            print(f"[LinkedInAgent] External apply error: {e}")
+            await self._log_error("External apply error", error=e, context=context)
             return "failed"
 
     # -------------------------------------------------------------------------
@@ -562,7 +702,7 @@ class LinkedInAgent:
                     writer.writeheader()
                 writer.writerow(job_data)
         except Exception as e:
-            print(f"[LinkedInAgent] Error saving job record: {e}")
+            await self._log_error("Error saving job record", error=e)
 
     # -------------------------------------------------------------------------
     # Handling Missing Elements / Refresh
@@ -572,7 +712,7 @@ class LinkedInAgent:
         If we fail to find certain elements, we refresh once, 
         wait, then if it fails again, skip the job.
         """
-        print("[LinkedInAgent] Attempting page refresh due to missing elements.")
+        await self._log_info("Attempting page refresh due to missing elements.")
         await self.page.reload()
         await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY)
 
@@ -634,14 +774,14 @@ class LinkedInAgent:
             # Handle CV upload if upload field exists
             cv_upload = self.page.locator(Selectors.CV_UPLOAD_INPUT)
             if await cv_upload.count() > 0:
-                print("[LinkedInAgent] Uploading CV...")
+                await self._log_info("Uploading CV...")
                 await cv_upload.set_input_files(str(cv_path))
                 await self.random_delay()  # Wait for upload
             
             # Skip cover letter if requested
             cover_letter = self.page.locator(Selectors.COVER_LETTER_INPUT)
             if await cover_letter.count() > 0:
-                print("[LinkedInAgent] Skipping cover letter (MVP)")
+                await self._log_info("Skipping cover letter (MVP)")
                 # Future: Implement cover letter handling
                 pass
             
@@ -655,122 +795,156 @@ class LinkedInAgent:
             return False
             
         except Exception as e:
-            print(f"[LinkedInAgent] Error in application form: {e}")
+            await self._log_error("Error in application form", error=e)
             return False
 
     async def search_jobs_and_apply(self, job_title: str, location: str):
         """Main method to orchestrate searching & applying on LinkedIn."""
+        method = "search_jobs_and_apply"
+        context = {"job_title": job_title, "location": location}
+        await self._log_debug(f"Entering {method}", context)
+        
         try:
-            self._log_info(f"Starting job search for: '{job_title}' in '{location}'")
-            
-            # Check for captcha/logout
-            await self.check_captcha_or_logout()
-            
-            # Ensure we're on jobs page
-            if not await self._verify_url_is_jobs():
-                await self.go_to_jobs_tab()
-            await self._human_delay(1.5, 2.5)
-            
-            # Check if we're in a narrow layout
-            if await self._is_narrow_layout():
-                self._log_info("Detected narrow/responsive layout")
-                if await self._handle_responsive_search(job_title, location):
-                    self._log_info("Successfully handled search in responsive layout")
-                else:
-                    self._log_info("Failed to handle responsive search, trying standard approach")
-            
-            # If responsive handling failed or we're in normal layout, continue with standard approach
-            # (existing code remains the same)
-            job_search_selectors = [
-                "input.jobs-search-box__text-input",
-                "input[aria-label='Search by title...']",
-                "input[aria-label*='Search jobs']",
-                "input[placeholder*='Search jobs']",
-                "input[type='text'][name*='keywords']"
-            ]
-            
-            location_search_selectors = [
-                "input.jobs-search-box__location-input",
-                "input[aria-label*='location']",
-                "input[aria-label='City, state, or zip code']",
-                "input[placeholder*='Location']"
-            ]
-            
-            # Fill job title
-            job_filled = False
-            for selector in job_search_selectors:
-                try:
-                    self._log_info(f"Attempting to fill job title using selector: {selector}")
-                    await self.page.fill(selector, "")  # Clear first
-                    await self.page.fill(selector, job_title)
-                    await self._human_delay(0.5, 1)
-                    job_filled = True
-                    self._log_info("Successfully filled job title")
-                    break
-                except Exception as e:
-                    self._log_info(f"Failed to fill job title with selector {selector}: {e}")
+            async with self._timed_operation(method):
+                await self._log_info(f"Starting job search for: '{job_title}' in '{location}'")
                 
-            # Fill location
-            location_filled = False
-            for selector in location_search_selectors:
-                try:
-                    self._log_info(f"Attempting to fill location using selector: {selector}")
-                    await self.page.fill(selector, "")  # Clear first
-                    await self.page.fill(selector, location)
-                    await self._human_delay(0.5, 1)
-                    location_filled = True
-                    self._log_info("Successfully filled location")
-                    break
-                except Exception as e:
-                    self._log_info(f"Failed to fill location with selector {selector}: {e}")
+                # Check for captcha/logout
+                await self.check_captcha_or_logout()
+                
+                # Track current URL before navigation
+                current_url = self.page.url
+                
+                # Ensure we're on jobs page
+                if not await self._verify_url_is_jobs():
+                    await self.go_to_jobs_tab()
+                await self._human_delay(1.5, 2.5)
+                
+                # Log navigation result
+                await self._log_navigation(
+                    from_url=current_url,
+                    to_url=self.page.url,
+                    method="ensure_jobs_page",
+                    success=await self._verify_url_is_jobs()
+                )
+                
+                # Check if we're in a narrow layout
+                if await self._is_narrow_layout():
+                    await self._log_info("Detected narrow/responsive layout")
+                    if await self._handle_responsive_search(job_title, location):
+                        await self._log_info("Successfully handled search in responsive layout")
+                    else:
+                        await self._log_info("Failed to handle responsive search, trying standard approach")
+                
+                # Define search selectors
+                job_search_selectors = [
+                    "input.jobs-search-box__text-input",
+                    "input[aria-label='Search by title...']",
+                    "input[aria-label*='Search jobs']",
+                    "input[placeholder*='Search jobs']",
+                    "input[type='text'][name*='keywords']"
+                ]
+                
+                location_search_selectors = [
+                    "input.jobs-search-box__location-input",
+                    "input[aria-label*='location']",
+                    "input[aria-label='City, state, or zip code']",
+                    "input[placeholder*='Location']"
+                ]
+                
+                # Track selector attempts for job title
+                successful_job_selector = None
+                job_filled = False
+                
+                for selector in job_search_selectors:
+                    try:
+                        await self.page.fill(selector, "")  # Clear first
+                        await self.page.fill(selector, job_title)
+                        await self._human_delay(0.5, 1)
+                        job_filled = True
+                        successful_job_selector = selector
+                        break
+                    except Exception as e:
+                        continue
+                
+                await self._log_selector_strategy(
+                    element_type="job_title_input",
+                    selectors=job_search_selectors,
+                    successful_selector=successful_job_selector,
+                    context={"job_title": job_title}
+                )
+                
+                # Track selector attempts for location
+                successful_location_selector = None
+                location_filled = False
+                
+                for selector in location_search_selectors:
+                    try:
+                        await self.page.fill(selector, "")  # Clear first
+                        await self.page.fill(selector, location)
+                        await self._human_delay(0.5, 1)
+                        location_filled = True
+                        successful_location_selector = selector
+                        break
+                    except Exception as e:
+                        continue
+                
+                await self._log_selector_strategy(
+                    element_type="location_input",
+                    selectors=location_search_selectors,
+                    successful_selector=successful_location_selector,
+                    context={"location": location}
+                )
 
-            # Trigger search
-            if job_filled or location_filled:
-                try:
-                    # Try clicking search button first
-                    search_button_selectors = [
-                        "button[type='submit']",
-                        ".jobs-search-box__submit-button",
-                        "button[data-tracking-control-name='public_jobs_jobs-search-bar_base-search-bar-search-submit']"
-                    ]
-                    
-                    button_clicked = False
-                    for selector in search_button_selectors:
-                        try:
-                            await self.page.click(selector)
-                            button_clicked = True
-                            self._log_info("Clicked search button")
-                            break
-                        except:
-                            continue
-                    
-                    # If button click failed, try pressing Enter in the search fields
-                    if not button_clicked:
-                        self._log_info("Search button not found, trying Enter key")
-                        if job_filled:
-                            await self.page.keyboard.press("Enter")
-                        elif location_filled:
-                            await self.page.keyboard.press("Enter")
-                    
-                    # Wait for results
-                    await self._human_delay(2, 3)
-                    await self.page.wait_for_selector(
-                        ".jobs-search-results-list",
-                        timeout=self.default_timeout
-                    )
-                    
-                    self._log_info("Search results loaded successfully")
-                    await self.process_job_listings()
-                    
-                except Exception as e:
-                    self._log_info(f"Error triggering search: {e}")
-                    raise
+                # Trigger search
+                if job_filled or location_filled:
+                    try:
+                        # Try clicking search button first
+                        search_button_selectors = [
+                            "button[type='submit']",
+                            ".jobs-search-box__submit-button",
+                            "button[data-tracking-control-name='public_jobs_jobs-search-bar_base-search-bar-search-submit']"
+                        ]
+                        
+                        button_clicked = False
+                        for selector in search_button_selectors:
+                            try:
+                                await self.page.click(selector)
+                                button_clicked = True
+                                await self._log_info("Clicked search button")
+                                break
+                            except:
+                                continue
+                        
+                        # If button click failed, try pressing Enter in the search fields
+                        if not button_clicked:
+                            await self._log_info("Search button not found, trying Enter key")
+                            if job_filled:
+                                await self.page.keyboard.press("Enter")
+                            elif location_filled:
+                                await self.page.keyboard.press("Enter")
+                        
+                        # Wait for results
+                        await self._human_delay(2, 3)
+                        await self.page.wait_for_selector(
+                            ".jobs-search-results-list",
+                            timeout=self.default_timeout
+                        )
+                        
+                        await self._log_info("Search results loaded successfully")
+                        await self.process_job_listings()
+                        
+                    except Exception as e:
+                        await self._log_error("Error triggering search", error=e, context=context)
+                        raise
                 
-            else:
-                raise Exception("Could not fill either job title or location")
+                else:
+                    raise Exception("Could not fill either job title or location")
+                
+                await self._log_outcome(method, True, f"Completed search for {job_title}")
+                await self._log_debug(f"Exiting {method} successfully")
                 
         except Exception as e:
-            self._log_info(f"Search and apply failed: {e}")
+            await self._log_error(f"Error in {method}", error=e, context=context)
             raise
 
     async def _retry_operation(self, operation, max_retries: int = 3):
@@ -805,7 +979,7 @@ class LinkedInAgent:
                 agent_name='LinkedInAgent'
             )
         except Exception as e:
-            print(f"[LinkedInAgent] Cleanup error: {e}")
+            await self._log_error("Cleanup error", error=e)
 
     async def _recover_from_error(self, error_type: str) -> bool:
         """Enhanced error recovery with validation."""
@@ -826,7 +1000,7 @@ class LinkedInAgent:
             return False
             
         except Exception as e:
-            print(f"[LinkedInAgent] Recovery failed for {error_type}: {e}")
+            await self._log_error("Recovery failed", error=e)
             return False
 
     async def _close_modal(self):
@@ -859,7 +1033,7 @@ class LinkedInAgent:
             
             return True
         except Exception as e:
-            print(f"[LinkedInAgent] Session health check failed: {e}")
+            await self._log_error("Session health check failed", error=e)
             return False
 
     async def _monitor_operation(self, operation_name: str):
@@ -893,16 +1067,70 @@ class LinkedInAgent:
                 return True
                 
         except PlaywrightTimeoutError:
-            print(f"[LinkedInAgent] Element not stable for {action_type}")
+            await self._log_warning(f"Element not stable for {action_type}")
             return False
         except Exception as e:
-            print(f"[LinkedInAgent] Error during {action_type}: {e}")
+            await self._log_error(f"Error during {action_type}", error=e)
             return False
 
-    def _log_info(self, message: str):
-        """Consistent logging wrapper"""
-        logger.info(f"[LinkedInAgent] {message}")
-        print(f"[LinkedInAgent] {message}")  # Keep console output for now
+    async def _log_info(self, message: str):
+        """Consistent logging wrapper using LogsManager"""
+        await self.logs_manager.info(f"[LinkedInAgent] {message}")
+
+    async def _log_error(self, message: str, error: Exception = None, context: dict = None):
+        """Enhanced error logging with optional context"""
+        error_msg = f"[LinkedInAgent] {message}"
+        if error:
+            error_msg += f" | Error: {str(error)}"
+        if context:
+            error_msg += f" | Context: {context}"
+        await self.logs_manager.error(error_msg)
+
+    async def _log_warning(self, message: str, context: dict = None):
+        """Log warning messages with optional context"""
+        warning_msg = f"[LinkedInAgent] {message}"
+        if context:
+            warning_msg += f" | Context: {context}"
+        await self.logs_manager.warning(warning_msg)
+
+    async def _log_debug(self, message: str, context: dict = None):
+        """Log debug messages with optional context"""
+        debug_msg = f"[LinkedInAgent] {message}"
+        if context:
+            debug_msg += f" | Context: {context}"
+        await self.logs_manager.debug(debug_msg)
+
+    async def _log_performance(self, operation: str, duration: float, context: dict = None):
+        """Log performance metrics"""
+        perf_msg = f"Performance: {operation} took {duration:.2f}s"
+        if context:
+            perf_msg += f" | Context: {context}"
+        await self._log_debug(perf_msg)
+
+    async def _log_state_change(self, from_state: str, to_state: str, details: str = None):
+        """Log state transitions"""
+        msg = f"State change: {from_state} -> {to_state}"
+        if details:
+            msg += f" ({details})"
+        await self._log_info(msg)
+
+    async def _log_outcome(self, operation: str, success: bool, details: str = None):
+        """Log operation outcomes"""
+        status = "Success" if success else "Failed"
+        msg = f"Outcome: {operation} - {status}"
+        if details:
+            msg += f" | {details}"
+        log_method = self._log_info if success else self._log_warning
+        await log_method(msg)
+
+    async def _timed_operation(self, operation_name: str):
+        """Context manager for timing operations"""
+        start_time = perf_counter()
+        try:
+            yield
+        finally:
+            duration = perf_counter() - start_time
+            await self._log_performance(operation_name, duration)
 
     async def _verify_jobs_page(self) -> bool:
         """Verify we're actually on the jobs page."""
@@ -928,7 +1156,7 @@ class LinkedInAgent:
                 
             return False
         except Exception as e:
-            self._log_info(f"Error verifying jobs page: {e}")
+            await self._log_error("Error verifying jobs page", error=e)
             return False
 
     async def _retry_with_backoff(self, operation, max_retries: int = 3):
@@ -940,7 +1168,7 @@ class LinkedInAgent:
                 if attempt == max_retries - 1:
                     raise
                 delay = TimingConstants.BASE_RETRY_DELAY * (2 ** attempt)
-                self._log_info(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s...")
+                await self._log_info(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s...")
                 await asyncio.sleep(delay)
 
     async def _ensure_jobs_search_ready(self) -> bool:
@@ -968,7 +1196,7 @@ class LinkedInAgent:
                 
             return False
         except Exception as e:
-            self._log_info(f"Error ensuring jobs search ready: {e}")
+            await self._log_error("Error ensuring jobs search ready", error=e)
             return False
 
     async def _handle_responsive_search(self, job_title: str = None, location: str = None) -> bool:
@@ -988,7 +1216,7 @@ class LinkedInAgent:
                 try:
                     search_icon = await self.page.query_selector(selector)
                     if search_icon:
-                        self._log_info(f"Found search icon with selector: {selector}")
+                        await self._log_info(f"Found search icon with selector: {selector}")
                         break
                 except Exception:
                     continue
@@ -1022,7 +1250,7 @@ class LinkedInAgent:
                             await self.page.fill(selector, "")  # Clear first
                             await self.page.fill(selector, job_title)
                             await self._human_delay(0.5, 1)
-                            self._log_info(f"Filled job title in responsive layout: {job_title}")
+                            await self._log_info(f"Filled job title in responsive layout: {job_title}")
                             break
                         except Exception:
                             continue
@@ -1034,7 +1262,7 @@ class LinkedInAgent:
                             await self.page.fill(selector, "")  # Clear first
                             await self.page.fill(selector, location)
                             await self._human_delay(0.5, 1)
-                            self._log_info(f"Filled location in responsive layout: {location}")
+                            await self._log_info(f"Filled location in responsive layout: {location}")
                             break
                         except Exception:
                             continue
@@ -1064,7 +1292,7 @@ class LinkedInAgent:
             return False
             
         except Exception as e:
-            self._log_info(f"Error handling responsive search: {e}")
+            await self._log_error("Error handling responsive search", error=e)
             return False
 
     async def _is_narrow_layout(self) -> bool:
@@ -1087,7 +1315,7 @@ class LinkedInAgent:
             return viewport_width < 768  # Common breakpoint for mobile layouts
             
         except Exception as e:
-            self._log_info(f"Error checking layout width: {e}")
+            await self._log_error("Error checking layout width", error=e)
             return False
 
     async def _handle_single_feed_layout(self) -> List[Dict]:
@@ -1106,7 +1334,7 @@ class LinkedInAgent:
                 try:
                     cards = await self.page.query_selector_all(selector)
                     if cards:
-                        self._log_info(f"Found {len(cards)} jobs in single feed layout")
+                        await self._log_info(f"Found {len(cards)} jobs in single feed layout")
                         job_cards = cards
                         break
                 except Exception:
@@ -1130,13 +1358,13 @@ class LinkedInAgent:
                         "card_element": card
                     })
                 except Exception as e:
-                    self._log_info(f"Error extracting card data: {e}")
+                    await self._log_error("Error extracting card data", error=e)
                     continue
                 
             return jobs_data
             
         except Exception as e:
-            self._log_info(f"Error handling single feed layout: {e}")
+            await self._log_error("Error handling single feed layout", error=e)
             return []
 
     async def _verify_login_state(self) -> bool:
@@ -1168,7 +1396,7 @@ class LinkedInAgent:
                 try:
                     element = await self.page.query_selector(selector)
                     if element and await element.is_visible():
-                        self._log_info("Found sign-in button - user is logged out")
+                        await self._log_info("Found sign-in button - user is logged out")
                         return False
                 except Exception:
                     continue
@@ -1179,10 +1407,10 @@ class LinkedInAgent:
                 current_url = self.page.url.lower()
                 return "feed" in current_url or "mynetwork" in current_url
             except Exception as e:
-                self._log_info(f"Error checking feed URL: {e}")
+                await self._log_error("Error checking feed URL", error=e)
                 
             return False
             
         except Exception as e:
-            self._log_info(f"Error verifying login state: {e}")
+            await self._log_error("Error verifying login state", error=e)
             return False
