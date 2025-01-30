@@ -68,7 +68,7 @@ async def async_main():
 
         # 4) Create controller (but don't start session yet)
         await logs_manager.info("Creating application controller...")
-        controller = Controller(settings, page)
+        controller = Controller(settings, page, logs_manager)
         await logs_manager.info("Controller created successfully")
         
         # 5) Run selected mode (session handled within modes)
@@ -85,7 +85,8 @@ async def async_main():
                 await controller.end_session()
                 await logs_manager.info("Controller session ended successfully")
             except Exception as e:
-                await logs_manager.error(f"Error during controller cleanup: {str(e)}")
+                if logs_manager:
+                    await logs_manager.error(f"Error during controller cleanup: {str(e)}")
 
         if browser and page:
             try:
@@ -94,14 +95,15 @@ async def async_main():
                     await browser_setup.cleanup(browser, page)
                     await logs_manager.info("Browser cleanup completed")
             except Exception as e:
-                await logs_manager.error(f"Error during browser cleanup: {str(e)}")
+                if logs_manager:
+                    await logs_manager.error(f"Error during browser cleanup: {str(e)}")
 
         if logs_manager:
             try:
                 await logs_manager.info("Shutting down logging system...")
                 await logs_manager.shutdown()
             except Exception as e:
-                # Can't log this through logs_manager since we're shutting it down
+                # Can't use logs_manager here since we're shutting it down
                 print(f"Error during logs cleanup: {e}")
 
 async def run_selected_mode(controller: Controller, logs_manager: LogsManager):
@@ -174,13 +176,14 @@ async def run_selected_mode(controller: Controller, logs_manager: LogsManager):
                         break
             else:
                 await logs_manager.warning(f"Invalid mode choice: {mode_choice}")
+                print("Invalid choice. Please select 1-4.")
                 
         except asyncio.CancelledError:
             await logs_manager.warning("Mode selection was cancelled")
             raise
         except Exception as e:
             await logs_manager.error(f"Error in mode selection: {str(e)}")
-            await logs_manager.info("Please try again")
+            print("An error occurred. Please try again.")
 
 async def run_automatic_mode(controller: Controller, logs_manager: LogsManager):
     """Automatic Mode - self-runs until completion."""
@@ -227,31 +230,32 @@ async def main():
     try:
         await async_main()
     except KeyboardInterrupt:
-        # We don't have logs_manager here, so we keep this print
         print("\nUser pressed Ctrl+C. Initiating graceful shutdown...")
     except Exception as e:
-        # We don't have logs_manager here, so we keep this print
         print(f"Unexpected error in main: {str(e)}")
     finally:
         print("\nCleaning up resources...")
-        # Get all tasks except the current one
-        pending_tasks = [t for t in asyncio.all_tasks() 
-                        if t is not asyncio.current_task()]
-        
-        if pending_tasks:
-            # Cancel all pending tasks
-            for task in pending_tasks:
-                task.cancel()
+        try:
+            # Get all tasks except the current one
+            pending_tasks = [t for t in asyncio.all_tasks() 
+                           if t is not asyncio.current_task()]
             
-            # Wait for all tasks to complete their cancellation
-            try:
-                await asyncio.gather(*pending_tasks, return_exceptions=True)
-            except asyncio.CancelledError:
-                pass  # This is expected during cleanup
-            
-        # Final delay to ensure cleanup
-        await asyncio.sleep(0.1)
-        print("Cleanup complete.")
+            if pending_tasks:
+                # Cancel all pending tasks
+                for task in pending_tasks:
+                    task.cancel()
+                
+                # Wait for all tasks to complete their cancellation
+                try:
+                    await asyncio.gather(*pending_tasks, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass  # This is expected during cleanup
+                
+            # Final delay to ensure cleanup
+            await asyncio.sleep(0.1)
+            print("Cleanup complete.")
+        except Exception as e:
+            print(f"Error during cleanup: {str(e)}")
 
 if __name__ == "__main__":
     asyncio.run(main())
