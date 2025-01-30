@@ -21,23 +21,25 @@ DOM Enhancement Updates:
 import asyncio
 import random
 import time
-from typing import Any, Optional, List
+from typing import Any, Optional, List, TYPE_CHECKING
 from playwright.async_api import (
     Page,
     TimeoutError as PlaywrightTimeoutError
 )
 from constants import TimingConstants, Messages
-from utils.telemetry import TelemetryManager
-from locators.linkedin_locators import LinkedInLocators  # Future import
 from utils.dom.dom_service import DomService
-from storage.logs_manager import LogsManager
+
+if TYPE_CHECKING:
+    from utils.telemetry import TelemetryManager
+    from locators.linkedin_locators import LinkedInLocators
+    from storage.logs_manager import LogsManager
 
 
 class GeneralAgent:
     def __init__(
         self,
-        dom_service: DomService,
-        logs_manager: LogsManager,
+        dom_service: 'DomService',
+        logs_manager: 'LogsManager',
         default_timeout: float = TimingConstants.DEFAULT_TIMEOUT,
         min_delay: float = TimingConstants.HUMAN_DELAY_MIN,
         max_delay: float = TimingConstants.HUMAN_DELAY_MAX,
