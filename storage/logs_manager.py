@@ -3,7 +3,7 @@ Logging Management Module (Async)
 
 Uses aiologger for async log output:
 - Daily log file naming (app_YYYYMMDD.log)
-- Console output with optional color for errors
+- Console output with print for Windows compatibility
 - Learning pipeline event logging
 - Archive function is commented out (for future use)
 """
@@ -12,11 +12,12 @@ import os
 import asyncio
 from datetime import datetime
 from pathlib import Path
+import logging
+from typing import Optional
 
 # aiologger essentials
 from aiologger.logger import Logger
 from aiologger.handlers.files import AsyncFileHandler
-from aiologger.handlers.streams import AsyncStreamHandler
 
 # For optional color in logs
 from colorama import init as colorama_init, Fore, Style
@@ -51,37 +52,66 @@ class LogsManager:
 
         # We'll create the logger in `initialize()`
         self.logger = None
+        self.file_handler = None
+        self.is_initialized = False
 
         # Optional: colorize error/critical logs
-        colorama_init(autoreset=True)  # ensures we reset color after each line
+        # Initialize colorama without auto-reset to prevent handle issues
+        colorama_init(autoreset=False)
 
         # Store telemetry manager
         self.telemetry_manager = telemetry_manager
 
     async def initialize(self):
         """
-        Async init to set up the aiologger's file + console handlers.
+        Async init to set up the aiologger's file handler.
         Call this after creating LogsManager in your async setup.
         """
-        # Create an async logger with the chosen log level
-        self.logger = Logger(name="AppLogger", level=self.log_level)
+        if self.is_initialized:
+            return
 
-        # File handler -> daily file
-        file_handler = AsyncFileHandler(filename=str(self.log_file))
-        # Console handler -> logs to stdout
-        console_handler = AsyncStreamHandler()
+        try:
+            # Create an async logger with the chosen log level
+            self.logger = Logger(name="AppLogger", level=self.log_level)
 
-        # Add both handlers
-        self.logger.add_handler(file_handler)
-        self.logger.add_handler(console_handler)
+            # File handler -> daily file
+            self.file_handler = AsyncFileHandler(filename=str(self.log_file))
+            
+            # Add file handler only - console output will be handled separately
+            self.logger.add_handler(self.file_handler)
+            
+            self.is_initialized = True
+            
+            # Log initialization success to file only
+            await self.logger.info("Logging system initialized successfully")
+            
+        except Exception as e:
+            print(f"Failed to initialize logger: {e}")
+            raise
 
     async def shutdown(self):
         """
         Cleanly shut down the logger, flushing any pending logs.
         Should be called before application exit.
         """
-        if self.logger:
-            await self.logger.shutdown()
+        if not self.is_initialized:
+            return
+
+        try:
+            if self.logger:
+                # Remove file handler and close it
+                if self.file_handler:
+                    self.logger.remove_handler(self.file_handler)
+                    await self.file_handler.close()
+                
+                # Then shutdown logger
+                await self.logger.shutdown()
+                
+            self.is_initialized = False
+            
+        except Exception as e:
+            # Use print since we can't log during shutdown
+            print(f"Error during logs cleanup: {e}")
 
     # -------------------------------------------------------------------------
     # Logging methods for convenience (info, debug, error, etc.)
@@ -89,35 +119,49 @@ class LogsManager:
 
     async def info(self, msg: str):
         """Log an INFO-level message."""
-        await self.logger.info(self._color_if_needed(msg, level="INFO"))
+        # Print to console with timestamp
+        print(f"[INFO] {msg}")
+        
+        # Log to file if initialized
+        if self.logger:
+            await self.logger.info(msg)
 
     async def debug(self, msg: str):
         """Log a DEBUG-level message."""
-        if self.log_level == "DEBUG":  # optional check
-            await self.logger.debug(self._color_if_needed(msg, level="DEBUG"))
+        if self.log_level == "DEBUG":
+            # Print debug messages only if in debug mode
+            print(f"[DEBUG] {msg}")
+            
+            # Log to file if initialized
+            if self.logger:
+                await self.logger.debug(msg)
 
     async def warning(self, msg: str):
         """Log a WARNING-level message."""
-        # Could color warnings in yellow if desired
-        await self.logger.warning(self._color_if_needed(msg, level="WARNING"))
+        # Print to console with color
+        print(f"{Fore.YELLOW}[WARNING] {msg}{Style.RESET_ALL}")
+        
+        # Log to file if initialized
+        if self.logger:
+            await self.logger.warning(msg)
 
     async def error(self, msg: str):
         """Log an ERROR-level message."""
-        await self.logger.error(self._color_if_needed(msg, level="ERROR"))
+        # Print to console with color
+        print(f"{Fore.RED}[ERROR] {msg}{Style.RESET_ALL}")
+        
+        # Log to file if initialized
+        if self.logger:
+            await self.logger.error(msg)
 
     async def critical(self, msg: str):
         """Log a CRITICAL-level message."""
-        await self.logger.critical(self._color_if_needed(msg, level="CRITICAL"))
-
-    def _color_if_needed(self, msg: str, level: str) -> str:
-        """
-        Optionally color errors/critical in red. 
-        Info/Debug/Warning remain uncolored for MVP simplicity.
-        """
-        if level in ["ERROR", "CRITICAL"]:
-            return f"{Fore.RED}{msg}{Style.RESET_ALL}"
-        # Could color warnings or debug differently if desired
-        return msg
+        # Print to console with color
+        print(f"{Fore.RED}[CRITICAL] {msg}{Style.RESET_ALL}")
+        
+        # Log to file if initialized
+        if self.logger:
+            await self.logger.critical(msg)
 
     # -------------------------------------------------------------------------
     # Commented-out archive logic for future expansion
