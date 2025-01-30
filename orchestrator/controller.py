@@ -87,9 +87,9 @@ class Controller:
         self.max_retries = settings.get('max_retries', 3)  # Default to 3 if not specified
         self.logs_manager = logs_manager
         
-        # Initialize all agents with settings
-        self.tracker_agent = TrackerAgent(settings)
-        self.credentials_agent = CredentialsAgent(settings)
+        # Initialize all agents with settings and logs_manager
+        self.tracker_agent = TrackerAgent(settings, logs_manager)
+        self.credentials_agent = CredentialsAgent(settings, logs_manager=logs_manager)
         
         # Initialize LinkedIn agent with page and controller
         self.linkedin_agent = LinkedInAgent(
@@ -97,7 +97,8 @@ class Controller:
             controller=self,
             default_timeout=settings.get('default_timeout', TimingConstants.DEFAULT_TIMEOUT),
             min_delay=settings.get('min_delay', TimingConstants.HUMAN_DELAY_MIN),
-            max_delay=settings.get('max_delay', TimingConstants.HUMAN_DELAY_MAX)
+            max_delay=settings.get('max_delay', TimingConstants.HUMAN_DELAY_MAX),
+            logs_manager=self.logs_manager
         )
 
         # Initialize AI Navigator
@@ -120,8 +121,8 @@ class Controller:
 
         self.telemetry = TelemetryManager(settings)
 
-        # Replace doc_processor with cv_parser
-        self.cv_parser = CVParserAgent(settings)
+        # Initialize CV Parser with settings and logs_manager
+        self.cv_parser = CVParserAgent(settings, logs_manager)
 
     async def start_session(self):
         """
