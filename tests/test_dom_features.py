@@ -13,7 +13,8 @@ from pathlib import Path
 import sys
 from utils.browser_setup import BrowserSetup
 from utils.dom.dom_service import DomService
-from utils.universal_model import ModelSelector
+from utils.model_selector import ModelSelector
+from storage.logs_manager import LogsManager
 import pytest
 
 @pytest.mark.asyncio
@@ -27,7 +28,8 @@ async def test_dom_features_with_vision():
             'should_prompt': False
         },
         'system': {
-            'data_dir': './data'
+            'data_dir': './data',
+            'log_level': 'DEBUG'  # Enable debug logging
         }
     }
 
@@ -36,24 +38,28 @@ async def test_dom_features_with_vision():
     screenshot_file = None
     vision_cost = 0.0
 
+    # Initialize LogsManager
+    logs_manager = LogsManager(settings)
+    await logs_manager.initialize()
+
     try:
         await page.goto('https://www.linkedin.com')
-        dom_svc = DomService(page, telemetry=browser_setup.telemetry)
+        dom_svc = DomService(page, telemetry=browser_setup.telemetry, logs_manager=logs_manager)
 
         # First highlight cycle
-        print("\nFirst highlight cycle...")
+        await logs_manager.info("Starting first highlight cycle...")
         clickable_elems = await dom_svc.get_clickable_elements(highlight=True, max_highlight=75)
-        print(f"Found {len(clickable_elems)} clickable elements")
+        await logs_manager.info(f"Found {len(clickable_elems)} clickable elements")
         await asyncio.sleep(15)  # Wait 15 seconds
 
         # Second highlight cycle
-        print("\nSecond highlight cycle...")
+        await logs_manager.info("Starting second highlight cycle...")
         clickable_elems = await dom_svc.get_clickable_elements(highlight=True, max_highlight=75)
-        print(f"Refreshed {len(clickable_elems)} clickable elements")
+        await logs_manager.info(f"Refreshed {len(clickable_elems)} clickable elements")
         await asyncio.sleep(5)  # Brief pause before screenshot
 
         # Take screenshot after second cycle
-        print("\nCapturing screenshot...")
+        await logs_manager.info("Capturing screenshot...")
         screenshot_path = Path("./data/screenshots")
         screenshot_path.mkdir(parents=True, exist_ok=True)
         screenshot_file = screenshot_path / "vision_test_screenshot.png"
@@ -74,8 +80,8 @@ async def test_dom_features_with_vision():
         4. Any clickable elements you can identify
         """
 
-        print(f"\nProcessing screenshot with {vision_model}...")
-        print("Prompt:", vision_prompt.strip())
+        await logs_manager.info(f"Processing screenshot with {vision_model}...")
+        await logs_manager.debug(f"Vision prompt: {vision_prompt.strip()}")
         
         try:
             response = model_selector.vision_completion(
@@ -87,11 +93,10 @@ async def test_dom_features_with_vision():
             if response.startswith("Error"):
                 raise Exception(response)
                 
+            await logs_manager.info("Vision processing completed successfully")
+                
         except Exception as e:
-            print(f"\n===== VISION PROCESSING ERROR =====")
-            print(str(e))
-            print("================================")
-            response = "Vision processing failed"
+            await logs_manager.error(f"Vision processing failed: {str(e)}")
             vision_cost = 0.0
 
         # Print vision model's response
@@ -107,7 +112,12 @@ async def test_dom_features_with_vision():
         await asyncio.sleep(15)
 
     finally:
+        # Clean up
+        await logs_manager.info("Cleaning up test resources...")
+        if screenshot_file and screenshot_file.exists():
+            screenshot_file.unlink()
         await browser_setup.cleanup(browser_or_context, page)
+        await logs_manager.shutdown()
         
         # Print cost summary after cleanup
         print("\n===== SESSION SUMMARY =====")
