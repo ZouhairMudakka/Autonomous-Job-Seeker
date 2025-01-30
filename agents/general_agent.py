@@ -357,9 +357,13 @@ class GeneralAgent:
         """
         await self._human_delay()
         try:
+            await self.logs_manager.debug(f"[GeneralAgent] Starting drag and drop from '{source_selector}' to '{target_selector}'")
             await self.dom_service.drag_and_drop(source_selector, target_selector, hold_delay=0.5)
+            await self.logs_manager.debug("[GeneralAgent] Successfully completed drag and drop")
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Drag-and-drop from '{source_selector}' to '{target_selector}' failed: {e}")
+            error_msg = f"[GeneralAgent] Drag-and-drop from '{source_selector}' to '{target_selector}' failed: {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def accept_cookies(self, accept_button_selector: str) -> bool:
         """
@@ -367,17 +371,18 @@ class GeneralAgent:
         Returns True if clicked, False if not found or failed.
         """
         await self._human_delay()
+        await self.logs_manager.debug(f"[GeneralAgent] Looking for cookies accept button: {accept_button_selector}")
         found = await self.dom_service.check_element_present(accept_button_selector, timeout=3000)
         if found:
             try:
                 await self.click_element(accept_button_selector)
-                print("[GeneralAgent] Cookies accepted.")
+                await self.logs_manager.info("[GeneralAgent] Cookies accepted.")
                 return True
             except Exception as e:
-                print(f"[GeneralAgent] Failed to click accept cookies button: {e}")
+                await self.logs_manager.warning(f"[GeneralAgent] Failed to click accept cookies button: {e}")
                 return False
         else:
-            print("[GeneralAgent] No cookies accept button found.")
+            await self.logs_manager.info("[GeneralAgent] No cookies accept button found.")
             return False
 
     async def wait_for_condition(self, condition_fn, timeout: Optional[float] = None, poll_interval: float = 0.5) -> bool:
@@ -398,13 +403,18 @@ class GeneralAgent:
         await self._check_if_paused()
         use_timeout = min(timeout if timeout is not None else self.default_timeout, TimingConstants.MAX_WAIT_TIME)
         
+        await self.logs_manager.debug("[GeneralAgent] Starting to wait for condition")
         end_time = self._current_time_ms() + use_timeout
         while self._current_time_ms() < end_time:
             try:
                 if await condition_fn():
+                    await self.logs_manager.debug("[GeneralAgent] Condition met successfully")
                     return True
             except Exception as e:
-                print(f"[GeneralAgent] Error checking condition: {e}")
+                await self.logs_manager.warning(f"[GeneralAgent] Error checking condition: {e}")
             await asyncio.sleep(poll_interval)
             
-        raise Exception("[GeneralAgent] Timed out waiting for condition")
+        error_msg = "[GeneralAgent] Timed out waiting for condition"
+        await self.logs_manager.error(error_msg)
+        raise Exception(error_msg)
+
