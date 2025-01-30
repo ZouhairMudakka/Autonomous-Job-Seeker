@@ -24,6 +24,7 @@ Future Expansions:
 import re
 from typing import Optional, Dict, List, Pattern
 from datetime import datetime
+from storage.logs_manager import LogsManager
 
 class RegexPatterns:
     """
@@ -73,18 +74,22 @@ class RegexPatterns:
         r'(?:\s*(?:monthly|yearly|per\s*hour|hr))?'
     )
 
-    # For expansions, you might also handle "negotiable|no info" with alternation
-    # if you want to pick that up in the same pattern.
-
     @classmethod
-    def compile_patterns(cls) -> Dict[str, Pattern]:
+    async def compile_patterns(cls, logs_manager: LogsManager) -> Dict[str, Pattern]:
         """
         Compile uppercase string attributes into compiled regex patterns for faster matching.
         """
+        await logs_manager.debug("Compiling regex patterns")
         pat_dict = {}
         for name, value in vars(cls).items():
             if name.isupper() and isinstance(value, str):
-                pat_dict[name] = re.compile(value, re.IGNORECASE)
+                try:
+                    pat_dict[name] = re.compile(value, re.IGNORECASE)
+                    await logs_manager.debug(f"Successfully compiled pattern: {name}")
+                except re.error as e:
+                    await logs_manager.error(f"Failed to compile pattern {name}: {str(e)}")
+                    raise
+        await logs_manager.info(f"Compiled {len(pat_dict)} regex patterns")
         return pat_dict
 
 
@@ -94,93 +99,125 @@ class RegexUtils:
     with the compiled patterns from RegexPatterns.
     """
 
-    def __init__(self):
+    def __init__(self, logs_manager: LogsManager):
         """
         Pre-compile patterns once for repeated usage.
         """
-        self.patterns = RegexPatterns.compile_patterns()
+        self.logs_manager = logs_manager
+        self.patterns = None  # Will be set in initialize()
 
-    def extract_all(self, text: str) -> Dict[str, List[str]]:
+    async def initialize(self):
+        """
+        Initialize the regex patterns asynchronously.
+        """
+        await self.logs_manager.info("Initializing RegexUtils")
+        self.patterns = await RegexPatterns.compile_patterns(self.logs_manager)
+
+    async def extract_all(self, text: str) -> Dict[str, List[str]]:
         """
         Extract all pattern matches from text, returning a dict of pattern_name -> list of matches.
-
-        Additional Note:
-         - If you have multiple patterns for phone, salary, or experience, you can add them to RegexPatterns and handle them here.
         """
+        await self.logs_manager.debug("Starting pattern extraction from text")
         results = {}
         for pat_name, compiled_pat in self.patterns.items():
-            matches = compiled_pat.findall(text)
-            # Filter out empty or nonsense matches if needed. For MVP, we keep them all.
-            results[pat_name] = matches
+            try:
+                matches = compiled_pat.findall(text)
+                results[pat_name] = matches
+                await self.logs_manager.debug(f"Found {len(matches)} matches for pattern {pat_name}")
+            except Exception as e:
+                await self.logs_manager.error(f"Error extracting {pat_name} patterns: {str(e)}")
+                raise
+        
+        await self.logs_manager.info(f"Completed pattern extraction with {sum(len(m) for m in results.values())} total matches")
         return results
 
-    def validate_email(self, email: str) -> bool:
+    async def validate_email(self, email: str) -> bool:
         """
         Strictly validate an email string via the EMAIL pattern.
-        Future expansions could do domain checks or DNS lookups.
         """
+        await self.logs_manager.debug(f"Validating email: {email}")
         pat = self.patterns.get("EMAIL")
         if not pat:
+            await self.logs_manager.error("EMAIL pattern not found")
             return False
-        return bool(pat.fullmatch(email))
+        is_valid = bool(pat.fullmatch(email))
+        await self.logs_manager.info(f"Email validation result: {is_valid}")
+        return is_valid
 
-    def validate_phone(self, phone: str) -> bool:
+    async def validate_phone(self, phone: str) -> bool:
         """
         Validate phone number format using the PHONE pattern.
-        MVP approach for typical US-style or partial international codes.
-        Future expansions: advanced library (phonenumbers).
         """
+        await self.logs_manager.debug(f"Validating phone number: {phone}")
         pat = self.patterns.get("PHONE")
         if not pat:
+            await self.logs_manager.error("PHONE pattern not found")
             return False
-        return bool(pat.fullmatch(phone))
+        is_valid = bool(pat.fullmatch(phone))
+        await self.logs_manager.info(f"Phone validation result: {is_valid}")
+        return is_valid
 
-    def extract_experience(self, text: str) -> List[str]:
+    async def extract_experience(self, text: str) -> List[str]:
         """
         Extract experience expressions like "3+ yrs", "2-4 years", "10yrs" from text.
-        Future expansions might parse them into numeric min/max.
         """
+        await self.logs_manager.debug("Extracting experience expressions from text")
         pat = self.patterns.get("EXPERIENCE")
         if not pat:
+            await self.logs_manager.error("EXPERIENCE pattern not found")
             return []
-        return pat.findall(text)
+        matches = pat.findall(text)
+        await self.logs_manager.info(f"Found {len(matches)} experience expressions")
+        return matches
 
-    def extract_salary(self, text: str) -> List[str]:
+    async def extract_salary(self, text: str) -> List[str]:
         """
-        Extract salary references in text. 
-        Could match e.g. "AED 30,000 monthly", "$50k - $80k", "USD 3,000 per hour", etc.
-        MVP: returns the raw matched strings. 
-        Future expansions: parse them into structured data (min, max, currency, period, etc.).
+        Extract salary references in text.
         """
+        await self.logs_manager.debug("Extracting salary expressions from text")
         pat = self.patterns.get("SALARY")
         if not pat:
+            await self.logs_manager.error("SALARY pattern not found")
             return []
-        return pat.findall(text)
+        matches = pat.findall(text)
+        await self.logs_manager.info(f"Found {len(matches)} salary expressions")
+        return matches
 
-    def extract_dates(self, text: str) -> List[str]:
+    async def extract_dates(self, text: str) -> List[str]:
         """
         Extract date strings like 01/31/2023 or 12-20-22 from the text.
-        Future expansions might parse them into datetime objects or handle multiple formats carefully.
         """
+        await self.logs_manager.debug("Extracting date expressions from text")
         pat = self.patterns.get("DATE")
         if not pat:
+            await self.logs_manager.error("DATE pattern not found")
             return []
-        return pat.findall(text)
+        matches = pat.findall(text)
+        await self.logs_manager.info(f"Found {len(matches)} date expressions")
+        return matches
 
-    def extract_urls(self, text: str) -> List[str]:
+    async def extract_urls(self, text: str) -> List[str]:
         """
         Extract URLs from text.
         """
+        await self.logs_manager.debug("Extracting URLs from text")
         pat = self.patterns.get("URL")
         if not pat:
+            await self.logs_manager.error("URL pattern not found")
             return []
-        return pat.findall(text)
+        matches = pat.findall(text)
+        await self.logs_manager.info(f"Found {len(matches)} URLs")
+        return matches
 
-    def extract_emails(self, text: str) -> List[str]:
+    async def extract_emails(self, text: str) -> List[str]:
         """
         Extract all email addresses from text.
         """
+        await self.logs_manager.debug("Extracting email addresses from text")
         pat = self.patterns.get("EMAIL")
         if not pat:
+            await self.logs_manager.error("EMAIL pattern not found")
             return []
-        return pat.findall(text)
+        matches = pat.findall(text)
+        await self.logs_manager.info(f"Found {len(matches)} email addresses")
+        return matches
