@@ -5,7 +5,7 @@ Features:
 1. Uses pandas for CSV read/write.
 2. Concurrency-safe (via an asyncio.Lock).
 3. Columns: row_id, timestamp, agent_name, job_id, type, details, status.
-4. Prints each log entry to terminal for real-time feedback.
+4. Logs each entry for real-time feedback.
 5. Size-based rotation: if activity_log.csv exceeds max_file_size_bytes,
    it renames the old file with a timestamp suffix and starts a new one.
 
@@ -26,9 +26,10 @@ from constants import TimingConstants, Messages
 import json
 import aiofiles
 from utils.telemetry import TelemetryManager
+from storage.logs_manager import LogsManager
 
 class TrackerAgent:
-    def __init__(self, settings: dict):
+    def __init__(self, settings: dict, logs_manager: LogsManager = None):
         """
         Args:
             settings (dict): Example:
@@ -36,10 +37,15 @@ class TrackerAgent:
                     "data_dir": "./logs",
                     "max_file_size_bytes": 5_000_000  # 5 MB
                 }
+            logs_manager (LogsManager, optional): Instance of LogsManager for logging.
+                If not provided, direct prints will be used as fallback.
         """
         self.data_dir = Path(settings.get("data_dir", "./logs"))
         self.data_dir.mkdir(exist_ok=True)
         self.activity_file = self.data_dir / "activity_log.csv"
+
+        # Store logs_manager reference
+        self.logs_manager = logs_manager
 
         # Set a max file size for rotation
         self.max_file_size_bytes = settings.get("max_file_size_bytes", 5_000_000)  # default 5 MB
@@ -81,7 +87,7 @@ class TrackerAgent:
     ) -> None:
         """
         Log an activity with a timestamp, agent name, job_id, etc.
-        Also prints the activity to the terminal for real-time feedback.
+        Also logs the activity for real-time feedback.
         """
         row_id = str(uuid.uuid4())
         timestamp_str = datetime.now().isoformat(sep=' ', timespec='seconds')
@@ -96,8 +102,12 @@ class TrackerAgent:
             "status": status
         }
 
-        # Print to terminal for real-time user feedback
-        print(f"[Tracker] {timestamp_str} | {agent_name} | {activity_type} | {details} | {status}")
+        # Log for real-time feedback
+        log_msg = f"{timestamp_str} | {agent_name} | {activity_type} | {details} | {status}"
+        if self.logs_manager:
+            await self.logs_manager.info(f"[Tracker] {log_msg}")
+        else:
+            print(f"[Tracker] {log_msg}")
 
         df = pd.DataFrame([activity], columns=self.log_columns)
 
@@ -121,7 +131,11 @@ class TrackerAgent:
                 await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
 
             except Exception as e:
-                print(f"[TrackerAgent] Error writing to CSV: {e}")
+                error_msg = f"Error writing to CSV: {e}"
+                if self.logs_manager:
+                    await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
+                else:
+                    print(f"[TrackerAgent] {error_msg}")
                 await asyncio.sleep(TimingConstants.ERROR_DELAY)
 
         self.activity_history.append(activity)
@@ -133,22 +147,35 @@ class TrackerAgent:
         Optional: filter by activity_type.
         """
         if not self.activity_file.exists():
+            if self.logs_manager:
+                await self.logs_manager.warning("[TrackerAgent] Activity file does not exist yet")
             return pd.DataFrame(columns=self.log_columns)
 
         try:
+            if self.logs_manager:
+                filter_msg = f" filtered by type '{activity_type}'" if activity_type else ""
+                await self.logs_manager.info(f"[TrackerAgent] Retrieving activities{filter_msg}")
+            
             # Add delay before file read
             await asyncio.sleep(TimingConstants.ACTION_DELAY)
             
             df = pd.read_csv(self.activity_file)
             if activity_type:
-                return df[df["type"] == activity_type]
+                df = df[df["type"] == activity_type]
             
             # Add delay after file read
             await asyncio.sleep(TimingConstants.TEXT_EXTRACTION_DELAY)
+
+            if self.logs_manager:
+                await self.logs_manager.info(f"[TrackerAgent] Retrieved {len(df)} activities")
             return df
             
         except Exception as e:
-            print(f"[TrackerAgent] Error reading CSV: {e}")
+            error_msg = f"Error reading CSV: {e}"
+            if self.logs_manager:
+                await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
+            else:
+                print(f"[TrackerAgent] {error_msg}")
             await asyncio.sleep(TimingConstants.ERROR_DELAY)
             return pd.DataFrame(columns=self.log_columns)
 
@@ -171,13 +198,21 @@ class TrackerAgent:
                 await asyncio.sleep(TimingConstants.ACTION_DELAY)
                 
                 self.activity_file.rename(rotated_name)
-                print(f"[TrackerAgent] Log file rotated. Old file: {rotated_name}")
+                log_msg = f"Log file rotated. Old file: {rotated_name}"
+                if self.logs_manager:
+                    await self.logs_manager.info(f"[TrackerAgent] {log_msg}")
+                else:
+                    print(f"[TrackerAgent] {log_msg}")
                 
                 # Add delay after file rotation
                 await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
                 
             except Exception as e:
-                print(f"[TrackerAgent] Error rotating log file: {e}")
+                error_msg = f"Error rotating log file: {e}"
+                if self.logs_manager:
+                    await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
+                else:
+                    print(f"[TrackerAgent] {error_msg}")
                 await asyncio.sleep(TimingConstants.ERROR_DELAY)
 
     async def get_recent_activities(
@@ -209,20 +244,45 @@ class TrackerAgent:
         """Load activities from disk."""
         activities_file = self.storage_path / 'activity_history.json'
         if activities_file.exists():
-            async with aiofiles.open(activities_file, 'r') as f:
-                content = await f.read()
-                self.activity_history = json.loads(content)
+            try:
+                if self.logs_manager:
+                    await self.logs_manager.debug("[TrackerAgent] Loading activities from disk")
+                
+                async with aiofiles.open(activities_file, 'r') as f:
+                    content = await f.read()
+                    self.activity_history = json.loads(content)
+                
+                if self.logs_manager:
+                    await self.logs_manager.info(f"[TrackerAgent] Loaded {len(self.activity_history)} activities from disk")
+            except Exception as e:
+                if self.logs_manager:
+                    await self.logs_manager.error(f"[TrackerAgent] Error loading activities: {e}")
                 
     async def _save_activities(self):
         """Save activities to disk."""
         activities_file = self.storage_path / 'activity_history.json'
-        async with aiofiles.open(activities_file, 'w') as f:
-            await f.write(json.dumps(self.activity_history))
+        try:
+            if self.logs_manager:
+                await self.logs_manager.debug("[TrackerAgent] Saving activities to disk")
+            
+            async with aiofiles.open(activities_file, 'w') as f:
+                await f.write(json.dumps(self.activity_history))
+            
+            if self.logs_manager:
+                await self.logs_manager.info(f"[TrackerAgent] Saved {len(self.activity_history)} activities to disk")
+        except Exception as e:
+            if self.logs_manager:
+                await self.logs_manager.error(f"[TrackerAgent] Error saving activities: {e}")
 
     async def track_action(self, action_name: str, context: dict = None) -> None:
         """
         Track an action with its context and update metrics.
         """
+        if self.logs_manager:
+            await self.logs_manager.info(f"[TrackerAgent] Tracking action: {action_name}")
+            if context:
+                await self.logs_manager.debug(f"[TrackerAgent] Action context: {json.dumps(context)}")
+
         timestamp = datetime.now().isoformat()
         
         action_data = {
@@ -252,6 +312,11 @@ class TrackerAgent:
             success=success,
             confidence=confidence
         )
+
+        if self.logs_manager:
+            await self.logs_manager.info(f"[TrackerAgent] Successfully tracked action: {action_name}")
+            if not success:
+                await self.logs_manager.warning(f"[TrackerAgent] Action {action_name} reported as unsuccessful")
     
     def _update_metrics(self, action_name: str, context: dict = None) -> None:
         """Update metrics based on the action and context."""
@@ -283,12 +348,19 @@ class TrackerAgent:
         """
         Update the current state with new values.
         """
+        if self.logs_manager:
+            await self.logs_manager.info(f"[TrackerAgent] Updating state with {len(state_updates)} changes")
+            await self.logs_manager.debug(f"[TrackerAgent] State updates: {json.dumps(state_updates)}")
+
         self.current_state.update(state_updates)
         
         # Track state change
         await self.track_action("state_updated", {
             "updates": state_updates
         })
+
+        if self.logs_manager:
+            await self.logs_manager.info("[TrackerAgent] State update completed successfully")
     
     def get_state_snapshot(self) -> dict:
         """
@@ -304,6 +376,10 @@ class TrackerAgent:
         """
         Analyze performance metrics within the given time window (in seconds).
         """
+        if self.logs_manager:
+            window_msg = f"within {time_window} seconds" if time_window else "for all time"
+            await self.logs_manager.info(f"[TrackerAgent] Analyzing performance {window_msg}")
+
         now = datetime.now()
         metrics = {}
         
@@ -320,5 +396,16 @@ class TrackerAgent:
                 "total_count": data["count"],
                 "avg_duration": data["avg_duration"]
             }
+
+            if self.logs_manager:
+                await self.logs_manager.debug(
+                    f"[TrackerAgent] Metrics for {action}: "
+                    f"success_rate={success_rate:.2f}, "
+                    f"count={data['count']}, "
+                    f"avg_duration={data['avg_duration']:.2f}"
+                )
+        
+        if self.logs_manager:
+            await self.logs_manager.info(f"[TrackerAgent] Performance analysis completed for {len(metrics)} actions")
         
         return metrics
