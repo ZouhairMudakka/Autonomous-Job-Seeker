@@ -30,12 +30,14 @@ from constants import TimingConstants, Messages
 from utils.telemetry import TelemetryManager
 from locators.linkedin_locators import LinkedInLocators  # Future import
 from utils.dom.dom_service import DomService
+from storage.logs_manager import LogsManager
 
 
 class GeneralAgent:
     def __init__(
         self,
         dom_service: DomService,
+        logs_manager: LogsManager,
         default_timeout: float = TimingConstants.DEFAULT_TIMEOUT,
         min_delay: float = TimingConstants.HUMAN_DELAY_MIN,
         max_delay: float = TimingConstants.HUMAN_DELAY_MAX,
@@ -44,12 +46,14 @@ class GeneralAgent:
         """
         Args:
             dom_service (DomService): The DomService instance for all DOM ops
+            logs_manager (LogsManager): The LogsManager instance for logging
             default_timeout (float): Default timeout for waits
             min_delay (float): Min delay for human-like interaction
             max_delay (float): Max delay for human-like interaction
             settings (dict): Additional configuration for telemetry
         """
         self.dom_service = dom_service
+        self.logs_manager = logs_manager
         self.page = dom_service.page  # convenience reference
         self.root_page = self.page    # Store reference to original "main" Page
         self.default_timeout = min(default_timeout, TimingConstants.MAX_WAIT_TIME)
@@ -63,21 +67,21 @@ class GeneralAgent:
     # ===================
     async def pause(self):
         """Pause further actions until 'resume' is called."""
-        print(f"[GeneralAgent] {Messages.PAUSE_MESSAGE}")
+        await self.logs_manager.info(f"[GeneralAgent] {Messages.PAUSE_MESSAGE}")
         self.is_paused = True
 
     async def resume(self):
         """Resume actions after being paused."""
-        print(f"[GeneralAgent] {Messages.RESUME_MESSAGE}")
+        await self.logs_manager.info(f"[GeneralAgent] {Messages.RESUME_MESSAGE}")
         self.is_paused = False
 
     async def _check_if_paused(self):
         """Block execution if paused, resuming only when self.is_paused = False."""
         if self.is_paused:
-            print("[GeneralAgent] Currently paused... waiting.")
+            await self.logs_manager.info("[GeneralAgent] Currently paused... waiting.")
             while self.is_paused:
                 await asyncio.sleep(TimingConstants.POLL_INTERVAL)
-            print("[GeneralAgent] Resumed from pause.")
+            await self.logs_manager.info("[GeneralAgent] Resumed from pause.")
 
     # ===================
     # Retry Logic
@@ -94,10 +98,12 @@ class GeneralAgent:
             except Exception as e:
                 last_exception = e
                 delay = TimingConstants.BASE_RETRY_DELAY * (2 ** attempt)
-                print(f"[GeneralAgent] {Messages.RETRY_MESSAGE.format(attempt+1, TimingConstants.MAX_RETRIES, e)}")
-                print(f"[GeneralAgent] Retrying in {delay} seconds...")
+                await self.logs_manager.warning(f"[GeneralAgent] {Messages.RETRY_MESSAGE.format(attempt+1, TimingConstants.MAX_RETRIES, e)}")
+                await self.logs_manager.info(f"[GeneralAgent] Retrying in {delay} seconds...")
                 await asyncio.sleep(delay)
-        raise Exception(f"[GeneralAgent] All retries failed. Last error: {last_exception}")
+        error_msg = f"[GeneralAgent] All retries failed. Last error: {last_exception}"
+        await self.logs_manager.error(error_msg)
+        raise Exception(error_msg)
 
     async def _navigate_operation(self, url: str):
         """
@@ -113,7 +119,7 @@ class GeneralAgent:
                     timeout=TimingConstants.MAX_WAIT_TIME
                 )
         except asyncio.TimeoutError:
-            print(f"[GeneralAgent] Navigation to {url} exceeded {TimingConstants.MAX_WAIT_TIME}ms limit. Proceeding anyway.")
+            await self.logs_manager.warning(f"[GeneralAgent] Navigation to {url} exceeded {TimingConstants.MAX_WAIT_TIME}ms limit. Proceeding anyway.")
             return None
 
     async def _human_delay(self, min_sec: float = None, max_sec: float = None):
@@ -149,9 +155,11 @@ class GeneralAgent:
         await self._check_if_paused()
         try:
             await self._human_delay()
+            await self.logs_manager.debug(f"[GeneralAgent] Attempting to click element: {selector}")
             await self.dom_service.click_element(selector)
+            await self.logs_manager.debug(f"[GeneralAgent] Successfully clicked element: {selector}")
         except Exception as e:
-            print(f"[GeneralAgent] Direct click failed: {e}")
+            await self.logs_manager.warning(f"[GeneralAgent] Direct click failed: {e}")
             # Domain-specific fallback
             try:
                 dom_selector = await LinkedInLocators.get_element(
@@ -160,51 +168,72 @@ class GeneralAgent:
                     dom_fallback=True
                 )
                 if dom_selector:
+                    await self.logs_manager.info(f"[GeneralAgent] Using fallback selector: {dom_selector}")
                     await self.dom_service.click_element(dom_selector)
+                    await self.logs_manager.debug(f"[GeneralAgent] Successfully clicked with fallback selector")
                 else:
-                    raise Exception(f"[GeneralAgent] Both direct click and fallback failed for '{selector}'")
+                    error_msg = f"[GeneralAgent] Both direct click and fallback failed for '{selector}'"
+                    await self.logs_manager.error(error_msg)
+                    raise Exception(error_msg)
             except Exception as e:
-                raise Exception(f"[GeneralAgent] Click operation failed completely: {e}")
+                error_msg = f"[GeneralAgent] Click operation failed completely: {e}"
+                await self.logs_manager.error(error_msg)
+                raise Exception(error_msg)
 
     async def extract_text(self, selector: str) -> str:
         """Extract text from an element."""
         await self._check_if_paused()
         try:
             await self._human_delay()
+            await self.logs_manager.debug(f"[GeneralAgent] Attempting to extract text from: {selector}")
             element = await self.dom_service.wait_for_selector(selector, timeout=self.default_timeout)
             if not element:
-                raise Exception(f"No element found for {selector}")
+                error_msg = f"[GeneralAgent] No element found for {selector}"
+                await self.logs_manager.error(error_msg)
+                raise Exception(error_msg)
             text = await element.text_content()
             await asyncio.sleep(TimingConstants.ACTION_DELAY)
+            await self.logs_manager.debug(f"[GeneralAgent] Successfully extracted text from: {selector}")
             return text or ""
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Failed to extract text from '{selector}': {e}")
+            error_msg = f"[GeneralAgent] Failed to extract text from '{selector}': {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def wait_for_text(self, selector: str, expected_text: str, timeout: Optional[float] = None) -> bool:
         """Wait until expected_text is found within element text."""
         await self._check_if_paused()
         use_timeout = min(timeout if timeout is not None else self.default_timeout, TimingConstants.MAX_WAIT_TIME)
         
+        await self.logs_manager.debug(f"[GeneralAgent] Waiting for text '{expected_text}' in selector: {selector}")
         end_time = self._current_time_ms() + use_timeout
         while self._current_time_ms() < end_time:
             try:
                 current_text = await self.extract_text(selector)
                 if expected_text in current_text:
+                    await self.logs_manager.debug(f"[GeneralAgent] Found expected text: '{expected_text}'")
                     return True
             except:
                 pass
             await asyncio.sleep(0.5)
-        raise Exception(f"[GeneralAgent] Timed out waiting for text '{expected_text}' in '{selector}'")
+        
+        error_msg = f"[GeneralAgent] Timed out waiting for text '{expected_text}' in '{selector}'"
+        await self.logs_manager.error(error_msg)
+        raise Exception(error_msg)
 
     async def type_text(self, selector: str, text: str, clear_first: bool = True) -> bool:
         """Type text into an input or textarea field."""
         await self._check_if_paused()
         try:
             await self._human_delay()
+            await self.logs_manager.debug(f"[GeneralAgent] Typing text into: {selector}")
             await self.dom_service.type_text(selector, text, clear_first=clear_first)
+            await self.logs_manager.debug(f"[GeneralAgent] Successfully typed text into: {selector}")
             return True
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Failed to type text into '{selector}': {e}")
+            error_msg = f"[GeneralAgent] Failed to type text into '{selector}': {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def scroll_to_bottom(self, step: int = 200, pause: float = TimingConstants.INFINITE_SCROLL_DELAY):
         """
@@ -216,7 +245,9 @@ class GeneralAgent:
         """
         await self._check_if_paused()
         await self._human_delay()
+        await self.logs_manager.debug(f"[GeneralAgent] Starting incremental scroll to bottom (step={step}px)")
         await self.dom_service.scroll_to_bottom(step=step, pause=pause)
+        await self.logs_manager.debug("[GeneralAgent] Completed scrolling to bottom")
 
     async def scroll_to_element(self, selector: str):
         """
@@ -224,9 +255,13 @@ class GeneralAgent:
         """
         await self._human_delay()
         try:
+            await self.logs_manager.debug(f"[GeneralAgent] Scrolling to element: {selector}")
             await self.dom_service.scroll_to_element(selector)
+            await self.logs_manager.debug(f"[GeneralAgent] Successfully scrolled to element: {selector}")
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Could not scroll to element '{selector}': {e}")
+            error_msg = f"[GeneralAgent] Could not scroll to element '{selector}': {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def take_screenshot(self, path: str):
         """
@@ -234,10 +269,13 @@ class GeneralAgent:
         """
         await self._human_delay()
         try:
+            await self.logs_manager.debug(f"[GeneralAgent] Taking screenshot: {path}")
             await self.dom_service.take_screenshot(path=path, full_page=True)
-            print(f"[GeneralAgent] Screenshot saved to: {path}")
+            await self.logs_manager.info(f"[GeneralAgent] Screenshot saved to: {path}")
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Failed to take screenshot: {e}")
+            error_msg = f"[GeneralAgent] Failed to take screenshot: {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def check_element_present(self, selector: str, timeout: Optional[float] = None) -> bool:
         """
@@ -247,14 +285,28 @@ class GeneralAgent:
             True if element is found within the given timeout, else False.
         """
         use_timeout = timeout if timeout is not None else self.default_timeout
-        return await self.dom_service.check_element_present(selector, timeout=use_timeout)
+        await self.logs_manager.debug(f"[GeneralAgent] Checking for element presence: {selector}")
+        result = await self.dom_service.check_element_present(selector, timeout=use_timeout)
+        if result:
+            await self.logs_manager.debug(f"[GeneralAgent] Element found: {selector}")
+        else:
+            await self.logs_manager.debug(f"[GeneralAgent] Element not found: {selector}")
+        return result
 
     async def evaluate_script(self, script: str) -> Any:
         """
         Evaluate arbitrary JavaScript in the page context.
         """
         await self._human_delay()
-        return await self.dom_service.evaluate_script(script)
+        await self.logs_manager.debug("[GeneralAgent] Evaluating JavaScript")
+        try:
+            result = await self.dom_service.evaluate_script(script)
+            await self.logs_manager.debug("[GeneralAgent] JavaScript evaluation completed")
+            return result
+        except Exception as e:
+            error_msg = f"[GeneralAgent] JavaScript evaluation failed: {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def extract_links(self, selector: str = "a") -> List[str]:
         """
@@ -262,9 +314,14 @@ class GeneralAgent:
         """
         await self._human_delay()
         try:
-            return await self.dom_service.extract_links(selector)
+            await self.logs_manager.debug(f"[GeneralAgent] Extracting links with selector: {selector}")
+            links = await self.dom_service.extract_links(selector)
+            await self.logs_manager.debug(f"[GeneralAgent] Successfully extracted {len(links)} links")
+            return links
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Failed to extract links with selector '{selector}': {e}")
+            error_msg = f"[GeneralAgent] Failed to extract links with selector '{selector}': {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def switch_to_iframe(self, iframe_selector: str):
         """
@@ -273,11 +330,15 @@ class GeneralAgent:
         """
         await self._human_delay()
         try:
+            await self.logs_manager.debug(f"[GeneralAgent] Switching to iframe: {iframe_selector}")
             await self.dom_service.switch_to_iframe(iframe_selector)
             # Update our page reference to match dom_service
             self.page = self.dom_service.page
+            await self.logs_manager.debug("[GeneralAgent] Successfully switched to iframe")
         except Exception as e:
-            raise Exception(f"[GeneralAgent] Failed to switch to iframe '{iframe_selector}': {e}")
+            error_msg = f"[GeneralAgent] Failed to switch to iframe '{iframe_selector}': {e}"
+            await self.logs_manager.error(error_msg)
+            raise Exception(error_msg)
 
     async def switch_back_to_main_frame(self):
         """
@@ -285,8 +346,10 @@ class GeneralAgent:
         Uses stored reference to avoid frame navigation issues.
         """
         await self._human_delay()
+        await self.logs_manager.debug("[GeneralAgent] Switching back to main frame")
         self.dom_service.switch_back_to_main_frame(self.root_page)
         self.page = self.root_page
+        await self.logs_manager.debug("[GeneralAgent] Successfully switched to main frame")
 
     async def drag_and_drop(self, source_selector: str, target_selector: str):
         """
