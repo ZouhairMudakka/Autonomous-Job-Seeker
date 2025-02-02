@@ -9,6 +9,47 @@ Features:
 5. Size-based rotation: if activity_log.csv exceeds max_file_size_bytes,
    it renames the old file with a timestamp suffix and starts a new one.
 
+Bypass Functionality:
+-------------------
+The TrackerAgent now includes comprehensive bypass mechanisms to selectively disable 
+tracking operations. This is useful for debugging, testing, or when certain tracking 
+operations need to be temporarily disabled.
+
+Available Bypass Operations:
+- 'uuid_gen': Skip UUID generation
+- 'timestamp': Skip timestamp formatting
+- 'activity_dict': Skip activity dictionary creation
+- 'logging': Skip activity message logging
+- 'history': Skip adding to internal history
+- 'disk_write': Skip writing to disk
+
+Usage Examples:
+1. Bypass all operations:
+   ```python
+   tracker_agent.enable_bypass()
+   ```
+
+2. Bypass specific operations:
+   ```python
+   tracker_agent.enable_bypass(['disk_write', 'history'])
+   ```
+
+3. Using context manager (recommended):
+   ```python
+   async with TemporaryBypass(tracker_agent):
+       await some_operation()
+   ```
+
+4. Selective bypass with context manager:
+   ```python
+   async with TemporaryBypass(tracker_agent, ['logging', 'disk_write']):
+       await some_operation()
+   ```
+
+Note: When all operations are bypassed, the log_activity method returns immediately 
+without performing any operations. This is the most efficient way to completely 
+disable tracking when needed.
+
 TODO (AI Integration):
 - Add confidence score tracking to activity logs
 - Integrate with learning pipeline events
@@ -28,6 +69,46 @@ import aiofiles
 from utils.telemetry import TelemetryManager
 from storage.logs_manager import LogsManager
 
+class TemporaryDisableLogging:
+    """Context manager to temporarily disable TrackerAgent logging."""
+    def __init__(self, tracker_agent):
+        self.tracker = tracker_agent
+        self.was_enabled = None
+
+    async def __aenter__(self):
+        """Disable logging and store previous state."""
+        self.was_enabled = self.tracker._logging_enabled
+        self.tracker.disable_logging()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Restore previous logging state."""
+        if self.was_enabled:
+            self.tracker.enable_logging()
+
+class TemporaryBypass:
+    """Context manager to temporarily bypass specified TrackerAgent operations."""
+    def __init__(self, tracker_agent, operations: list[str] = None):
+        self.tracker = tracker_agent
+        self.operations = operations
+        self.previous_state = {}
+
+    async def __aenter__(self):
+        """Enable bypass for specified operations and store previous state."""
+        # Store current state
+        self.previous_state = {
+            'bypass_mode': self.tracker._bypass_mode,
+            'operations': self.tracker._bypass_operations.copy()
+        }
+        # Enable bypass
+        self.tracker.enable_bypass(self.operations)
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Restore previous state."""
+        self.tracker._bypass_mode = self.previous_state['bypass_mode']
+        self.tracker._bypass_operations = self.previous_state['operations']
+
 class TrackerAgent:
     def __init__(self, settings: dict, logs_manager: LogsManager = None):
         """
@@ -43,10 +124,24 @@ class TrackerAgent:
         # Store logs_manager reference
         self.logs_manager = logs_manager
         
+        # Add bypass flags
+        self._bypass_mode = False
+        self._bypass_operations = {
+            'uuid_gen': True,      # Skip UUID generation
+            'timestamp': True,     # Skip timestamp formatting
+            'activity_dict': True, # Skip activity dictionary creation
+            'logging': True,       # Skip activity message logging
+            'history': True,       # Skip adding to internal history
+            'disk_write': True     # Skip writing to disk
+        }
+        
         # Log initialization start
-        if self.logs_manager:
+        if self.logs_manager and not self._bypass_mode:
             asyncio.create_task(self.logs_manager.info("[TrackerAgent] Initializing tracker agent..."))
-
+        
+        # Add logging control flag
+        self._logging_enabled = True
+        
         self.data_dir = Path(settings.get("data_dir", "./logs"))
         self.data_dir.mkdir(exist_ok=True)
         self.activity_file = self.data_dir / "activity_log.csv"
@@ -85,6 +180,64 @@ class TrackerAgent:
         if self.logs_manager:
             asyncio.create_task(self.logs_manager.info("[TrackerAgent] Initialization complete"))
 
+    def disable_logging(self):
+        """Temporarily disable activity logging."""
+        self._logging_enabled = False
+        if self.logs_manager:
+            asyncio.create_task(self.logs_manager.debug("[TrackerAgent] Activity logging disabled"))
+
+    def enable_logging(self):
+        """Re-enable activity logging."""
+        self._logging_enabled = True
+        if self.logs_manager:
+            asyncio.create_task(self.logs_manager.debug("[TrackerAgent] Activity logging enabled"))
+
+    def enable_bypass(self, operations: list[str] = None):
+        """
+        Enable bypass mode for specified operations or all if none specified.
+        
+        Args:
+            operations: List of operations to bypass. Options:
+                - 'uuid_gen': Skip UUID generation
+                - 'timestamp': Skip timestamp formatting
+                - 'activity_dict': Skip activity dictionary creation
+                - 'logging': Skip activity message logging
+                - 'history': Skip adding to internal history
+                - 'disk_write': Skip writing to disk
+                If None, bypasses all operations.
+        """
+        print("[DEBUG] TrackerAgent: Enabling bypass")
+        print(f"[DEBUG] - Current bypass_mode: {self._bypass_mode}")
+        print(f"[DEBUG] - Current operations: {self._bypass_operations}")
+        
+        self._bypass_mode = True
+        if operations:
+            for op in operations:
+                if op in self._bypass_operations:
+                    self._bypass_operations[op] = True
+                    print(f"[DEBUG] - Enabled bypass for: {op}")
+        else:
+            # Bypass all operations
+            for op in self._bypass_operations:
+                self._bypass_operations[op] = True
+            print("[DEBUG] - Enabled bypass for all operations")
+        
+        print(f"[DEBUG] - New bypass_mode: {self._bypass_mode}")
+        print(f"[DEBUG] - New operations: {self._bypass_operations}")
+
+    def disable_bypass(self, operations: list[str] = None):
+        """Disable bypass mode for specified operations or all if none specified."""
+        if operations:
+            for op in operations:
+                if op in self._bypass_operations:
+                    self._bypass_operations[op] = False
+            # Check if all operations are disabled
+            self._bypass_mode = any(self._bypass_operations.values())
+        else:
+            self._bypass_mode = False
+            for op in self._bypass_operations:
+                self._bypass_operations[op] = False
+
     async def log_activity(
         self,
         activity_type: str,
@@ -97,61 +250,70 @@ class TrackerAgent:
         Log an activity with a timestamp, agent name, job_id, etc.
         Also logs the activity for real-time feedback.
         """
-        row_id = str(uuid.uuid4())
-        timestamp_str = datetime.now().isoformat(sep=' ', timespec='seconds')
+        print(f"[DEBUG] TrackerAgent: log_activity called")
+        print(f"[DEBUG] - bypass_mode: {self._bypass_mode}")
+        print(f"[DEBUG] - operations: {self._bypass_operations}")
+        
+        # Quick return if everything is bypassed
+        if self._bypass_mode and all(self._bypass_operations.values()):
+            print("[DEBUG] TrackerAgent: All operations bypassed, skipping log_activity")
+            return
 
-        activity = {
-            "row_id": row_id,
-            "timestamp": timestamp_str,
-            "agent_name": agent_name,
-            "job_id": job_id,
-            "type": activity_type,
-            "details": details,
-            "status": status
-        }
+        print("[DEBUG] TrackerAgent: Processing activity with selective bypassing")
+        # Selective bypassing of operations
+        activity = {}
+        
+        if not self._bypass_operations['uuid_gen']:
+            print("[DEBUG] - Generating UUID")
+            activity["row_id"] = str(uuid.uuid4())
+            
+        if not self._bypass_operations['timestamp']:
+            print("[DEBUG] - Adding timestamp")
+            activity["timestamp"] = datetime.now().isoformat(sep=' ', timespec='seconds')
+            
+        if not self._bypass_operations['activity_dict']:
+            print("[DEBUG] - Creating activity dictionary")
+            activity.update({
+                "agent_name": agent_name,
+                "job_id": job_id,
+                "type": activity_type,
+                "details": details,
+                "status": status
+            })
 
-        # Log for real-time feedback
-        log_msg = f"{timestamp_str} | {agent_name} | {activity_type} | {details} | {status}"
-        if self.logs_manager:
+        # Log for real-time feedback if not bypassed
+        if not self._bypass_operations['logging'] and self.logs_manager:
+            print("[DEBUG] - Logging activity message")
+            log_msg = f"{activity.get('timestamp', '')} | {agent_name} | {activity_type} | {details} | {status}"
             await self.logs_manager.info(f"[TrackerAgent] Activity: {log_msg}")
 
-        df = pd.DataFrame([activity], columns=self.log_columns)
+        # Add to history if not bypassed
+        if not self._bypass_operations['history']:
+            print("[DEBUG] - Adding to activity history")
+            self.activity_history.append(activity)
 
-        async with self._lock:
-            try:
-                # Add delay before file operations
-                await asyncio.sleep(TimingConstants.ACTION_DELAY)
-                
-                # Rotate if needed before writing
-                await self._rotate_if_needed()
+        # Write to disk if not bypassed
+        if not self._bypass_operations['disk_write']:
+            print("[DEBUG] - Writing to disk")
+            df = pd.DataFrame([activity], columns=self.log_columns)
+            async with self._lock:
+                try:
+                    await self._rotate_if_needed()
+                    file_exists = self.activity_file.exists()
+                    df.to_csv(
+                        self.activity_file,
+                        mode="a",
+                        header=not file_exists,
+                        index=False
+                    )
+                    print("[DEBUG] - Successfully wrote to disk")
+                except Exception as e:
+                    print(f"[DEBUG] - Error writing to disk: {str(e)}")
+                    if self.logs_manager:
+                        await self.logs_manager.error(f"[TrackerAgent] Error writing to CSV: {e}")
 
-                file_exists = self.activity_file.exists()
-                
-                if self.logs_manager:
-                    await self.logs_manager.debug(f"[TrackerAgent] Writing activity to CSV: {activity_type}")
-                
-                df.to_csv(
-                    self.activity_file,
-                    mode="a",
-                    header=not file_exists,
-                    index=False
-                )
+        print("[DEBUG] TrackerAgent: log_activity completed")
 
-                if self.logs_manager:
-                    await self.logs_manager.debug("[TrackerAgent] Successfully wrote activity to CSV")
-
-                # Add delay after file operations
-                await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
-
-            except Exception as e:
-                error_msg = f"Error writing to CSV: {e}"
-                if self.logs_manager:
-                    await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
-                else:
-                    print(f"[TrackerAgent] {error_msg}")
-                await asyncio.sleep(TimingConstants.ERROR_DELAY)
-
-        self.activity_history.append(activity)
         await self._save_activities()
 
     async def get_activities(self, activity_type: str = None) -> pd.DataFrame:
@@ -433,3 +595,12 @@ class TrackerAgent:
             await self.logs_manager.info(f"[TrackerAgent] Performance analysis completed for {len(metrics)} actions")
         
         return metrics
+
+    @property
+    def is_logging_enabled(self) -> bool:
+        """Check if logging is currently enabled."""
+        return self._logging_enabled
+
+    def temp_disable(self):
+        """Get a context manager to temporarily disable logging."""
+        return TemporaryDisableLogging(self)
