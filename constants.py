@@ -7,97 +7,101 @@ standardized log messages.
 """
 
 class TimingConstants:
-    """Timing constants for delays and timeouts."""
+    """Timing constants for delays and timeouts. All values in milliseconds (ms)."""
     
-    # Base delays
-    BASE_RETRY_DELAY = 2000  # 2 seconds
-    ACTION_DELAY = 1000  # 1 second
-    POLL_INTERVAL = 2000     # 2 seconds in ms
+    # Base delays - Minimal core delays
+    BASE_RETRY_DELAY = 200    # 200ms (0.2s) - minimum time to retry operations
+    ACTION_DELAY = 20         # 20ms (0.02s) - minimum action delay
+    POLL_INTERVAL = 100       # 100ms (0.1s) - fast but not CPU intensive
     
-    # Verification delays
-    VERIFICATION_DELAY = 1000      # 1 second
-    EXTENDED_VERIFICATION_DELAY = 3000  # 3 seconds
+    # Verification delays - Quick checks
+    VERIFICATION_DELAY = 200        # 200ms (0.2s) - quick verification
+    EXTENDED_VERIFICATION_DELAY = 500  # 500ms (0.5s) - for complex verifications
     
-    # Wait periods
-    EXTENDED_WAIT_DELAY = 10000  # 10 seconds
-    RATE_LIMIT_DELAY = 5000  # 5 seconds
+    # Wait periods - Reduced but maintaining rate limit compliance
+    EXTENDED_WAIT_DELAY = 1000  # 1000ms (1s) - for complex operations
+    RATE_LIMIT_DELAY = 1000     # 1000ms (1s) - minimum safe rate limit
     
-    # Default timeouts
-    DEFAULT_TIMEOUT = 30000  # 30 seconds
+    # Default timeouts - Balanced for reliability
+    DEFAULT_TIMEOUT = 5000   # 5000ms (5s) - faster timeout for operations
     
-    # Human-like delays
-    HUMAN_DELAY_MIN = 0.5
-    HUMAN_DELAY_MAX = 2.0
+    # Human-like delays - Maintain some human-like behavior
+    HUMAN_DELAY_MIN = 100    # 100ms (0.1s) - Faster but still human-like
+    HUMAN_DELAY_MAX = 300    # 300ms (0.3s) - Reduced maximum delay
     
-    # Processing delays
-    PDF_PAGE_PARSE_DELAY = 100    # 0.1 seconds
-    FILE_READ_DELAY = 100         # 0.1 seconds
-    LLM_PROCESSING_DELAY = 1000   # 1 second
-    VALIDATION_DELAY = 500        # 0.5 seconds
+    # Processing delays - Minimal processing times
+    PDF_PAGE_PARSE_DELAY = 50     # 50ms (0.05s)
+    FILE_READ_DELAY = 50          # 50ms (0.05s)
+    LLM_PROCESSING_DELAY = 200    # 200ms (0.2s)
+    VALIDATION_DELAY = 100        # 100ms (0.1s)
 
     # -------------------------------------
-    # Maximum wait / timeouts
+    # Maximum wait / timeouts - Reduced maximums
     # -------------------------------------
-    MAX_WAIT_TIME = 60000  # 1 minute
-    NAVIGATION_TIMEOUT = 15000  # ms - special wait for page loads
-    NETWORK_IDLE_TIMEOUT = 10000   # ms - wait for network activity to settle
+    MAX_WAIT_TIME = 10000        # 10000ms (10s) - reduced from 30s
+    NAVIGATION_TIMEOUT = 5000    # 5000ms (5s) - faster navigation timeout
+    NETWORK_IDLE_TIMEOUT = 2000  # 2000ms (2s) - faster network idle
 
     # -------------------------------------
-    # Human-like interaction delays
+    # Human-like interaction delays - Minimal but still human-like
     # -------------------------------------
-    DRAG_HOLD_MIN = 0.5    # s - minimum time to hold during drag operations
-    DRAG_HOLD_MAX = 1.0    # s - maximum time to hold during drag operations
+    DRAG_HOLD_MIN = 100    # 100ms (0.1s) - faster drag operations
+    DRAG_HOLD_MAX = 200    # 200ms (0.2s) - reduced maximum drag time
 
     # -------------------------------------
-    # Standard operation delays
+    # Standard operation delays - Optimized core operations
     # -------------------------------------
-    PAGE_TRANSITION_DELAY = 2000  # 2 seconds
-    TEXT_EXTRACTION_DELAY = 1000  # 1 second
-    SCREENSHOT_DELAY = 500  # 0.5 seconds
-    SCROLL_STEP_DELAY = 0.5   # s - delay between scroll steps
-    ERROR_DELAY = 3000  # 3 seconds
+    PAGE_TRANSITION_DELAY = 300
+    TEXT_EXTRACTION_DELAY = 200   # 200ms (0.2s) - quick text extraction
+    SCREENSHOT_DELAY = 100        # 100ms (0.1s) - quick screenshots
+    SCROLL_STEP_DELAY = 100       # 100ms (0.1s) - faster scrolling
+    ERROR_DELAY = 200             # 200ms (0.2s) - reduced error delay
 
     # -------------------------------------
-    # Retry configurations
+    # File operation delays - Minimal safe delays
     # -------------------------------------
-    MAX_RETRIES = 3                # maximum number of retry attempts
-    RETRY_BACKOFF_FACTOR = 2       # multiply delay by this factor each retry
+    FILE_UPLOAD_DELAY = 200      # 200ms (0.2s) - reduced file operation delay
 
     # -------------------------------------
-    # Task Manager specific
+    # Retry configurations - More aggressive retry strategy
     # -------------------------------------
-    QUEUE_CHECK_INTERVAL = 1000  # 1 second
-    TASK_TIMEOUT = 300000  # 5 minutes
+    MAX_RETRIES = 2              # Number of retry attempts
+    RETRY_BACKOFF_FACTOR = 1.2   # Multiply delay by this factor each retry
 
     # -------------------------------------
-    # Form-specific
+    # Task Manager specific - Faster task management
     # -------------------------------------
-    FORM_SUBMIT_DELAY = 2.0  # s - delay after form submission
-    FORM_FIELD_DELAY = 0.5   # s - delay between filling form fields
-    FORM_VALIDATION_DELAY = 1.0  # s - delay to wait for form validation
-    FILE_UPLOAD_DELAY = 2000  # 2 seconds
+    QUEUE_CHECK_INTERVAL = 200   # 200ms (0.2s) - faster queue checks
+    TASK_TIMEOUT = 30000        # 30000ms (30s) - reduced task timeout
 
     # -------------------------------------
-    # LinkedIn specific
+    # Form-specific - Optimized form interactions
     # -------------------------------------
-    EASY_APPLY_MODAL_DELAY = 2.0   # s - wait for Easy Apply modal to appear
-    JOB_CARD_LOAD_DELAY = 2.0      # s - wait for job details to load
-    NEXT_PAGE_DELAY = 3.0          # s - wait after clicking next page
-    INFINITE_SCROLL_DELAY = 2.0    # s - wait after scroll for content to load
-    PROFILE_LOAD_DELAY = 3.0       # s - wait for profile content to load
-    SEARCH_RESULTS_DELAY = 2.0     # s - wait for search results to update
+    FORM_SUBMIT_DELAY = 300      # 300ms (0.3s) - faster form submission
+    FORM_FIELD_DELAY = 100       # 100ms (0.1s) - faster field filling
+    FORM_VALIDATION_DELAY = 200  # 200ms (0.2s) - quicker validation
 
     # -------------------------------------
-    # Cookie and Modal handling
+    # LinkedIn specific - Platform-specific optimizations
     # -------------------------------------
-    COOKIE_BANNER_TIMEOUT = 3000    # ms - time to wait for cookie banner
-    MODAL_TRANSITION_DELAY = 1000  # 1 second
-    POPUP_CHECK_DELAY = 0.5         # s - interval to check for popups
+    EASY_APPLY_MODAL_DELAY = 500    # 500ms (0.5s) - faster modal handling
+    JOB_CARD_LOAD_DELAY = 500       # 500ms (0.5s) - faster card loading
+    NEXT_PAGE_DELAY = 700           # 700ms (0.7s) - faster page navigation
+    INFINITE_SCROLL_DELAY = 500     # 500ms (0.5s) - faster scroll handling
+    PROFILE_LOAD_DELAY = 700        # 700ms (0.7s) - faster profile loading
+    SEARCH_RESULTS_DELAY = 500      # 500ms (0.5s) - faster search results
 
-    # Add these missing constants used in LinkedInAgent
-    SEARCH_FIELD_DELAY = 1.0    # s - delay between search field interactions
-    SEARCH_BUTTON_DELAY = 2.0   # s - delay after clicking search button
-    SEARCH_LOAD_DELAY = 3.0     # s - wait for search results to load initially
+    # -------------------------------------
+    # Cookie and Modal handling - Quick UI interactions
+    # -------------------------------------
+    COOKIE_BANNER_TIMEOUT = 500     # 500ms (0.5s) - faster cookie handling
+    MODAL_TRANSITION_DELAY = 200    # 200ms (0.2s) - faster modal transitions
+    POPUP_CHECK_DELAY = 100         # 100ms (0.1s) - quick popup checks
+
+    # LinkedIn search specific - Optimized search operations
+    SEARCH_FIELD_DELAY = 200
+    SEARCH_BUTTON_DELAY = 300    # 300ms (0.3s) - faster button click
+    SEARCH_LOAD_DELAY = 500      # 500ms (0.5s) - faster search loading
 
 class Selectors:
     """
@@ -180,3 +184,46 @@ class Messages:
     STATE_SAVED = "Session state saved successfully"
     STATE_RESTORED = "Session state restored successfully"
     STATE_INVALID = "Invalid session state: {}"
+
+class DebugTimingConstants:
+    """Constants for debug timing and logging."""
+    
+    # Debug log formats
+    SLEEP_START_FORMAT = "[DEBUG] About to sleep for {seconds} seconds. Reason: {reason}"
+    SLEEP_END_FORMAT = "[DEBUG] Finished sleeping. Duration was {duration:.2f} seconds."
+    
+    # Debug timing flags
+    ENABLE_DEBUG_TIMING = True  # Master switch for debug timing
+    LOG_ALL_WAITS = True       # Log all wait operations
+    LOG_LONG_WAITS = True      # Log only waits over threshold
+    LONG_WAIT_THRESHOLD = 1.0  # Threshold in seconds for long wait logging
+
+class DebugSleepHelper:
+    """Helper class for debug timing functionality."""
+    
+    @staticmethod
+    def format_sleep_start(seconds: float, reason: str = "") -> str:
+        """Format the sleep start debug message."""
+        return DebugTimingConstants.SLEEP_START_FORMAT.format(
+            seconds=seconds,
+            reason=reason
+        )
+    
+    @staticmethod
+    def format_sleep_end(duration: float) -> str:
+        """Format the sleep end debug message."""
+        return DebugTimingConstants.SLEEP_END_FORMAT.format(
+            duration=duration
+        )
+    
+    @staticmethod
+    def should_log_wait(duration: float) -> bool:
+        """Determine if a wait should be logged based on settings."""
+        if not DebugTimingConstants.ENABLE_DEBUG_TIMING:
+            return False
+        if DebugTimingConstants.LOG_ALL_WAITS:
+            return True
+        if (DebugTimingConstants.LOG_LONG_WAITS and 
+            duration >= DebugTimingConstants.LONG_WAIT_THRESHOLD):
+            return True
+        return False
