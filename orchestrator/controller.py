@@ -61,6 +61,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, TYPE_CHECKING
 from playwright.async_api import Page
+import threading
 
 from agents.linkedin_agent import LinkedInAgent
 from agents.credentials_agent import CredentialsAgent
@@ -73,6 +74,7 @@ from datetime import datetime, timedelta
 from agents.cv_parser_agent import CVParserAgent
 from storage.logs_manager import LogsManager
 from utils.dom.dom_service import DomService
+from utils.bypass import TemporaryBypass
 
 if TYPE_CHECKING:
     from agents.general_agent import GeneralAgent
@@ -80,49 +82,227 @@ if TYPE_CHECKING:
     from agents.user_profile_agent import UserProfileAgent
 
 class Controller:
-    def __init__(self, settings: Dict, page: Page, logs_manager: Optional['LogsManager'] = None):
-        """Initialize the controller with settings and browser page."""
-        self.settings = settings
-        self.page = page
-        self.max_retries = settings.get('max_retries', 3)  # Default to 3 if not specified
-        self.logs_manager = logs_manager
-        
-        # Initialize all agents with settings and logs_manager
-        self.tracker_agent = TrackerAgent(settings, logs_manager)
-        self.credentials_agent = CredentialsAgent(settings, logs_manager=logs_manager)
-        
-        # Initialize LinkedIn agent with page and controller
-        self.linkedin_agent = LinkedInAgent(
-            page=self.page,
-            controller=self,
-            default_timeout=settings.get('default_timeout', TimingConstants.DEFAULT_TIMEOUT),
-            min_delay=settings.get('min_delay', TimingConstants.HUMAN_DELAY_MIN),
-            max_delay=settings.get('max_delay', TimingConstants.HUMAN_DELAY_MAX),
-            logs_manager=self.logs_manager
-        )
+    def __init__(self, settings: dict, page: Optional['Page'] = None):
+        """Initialize the controller with settings and optional page object."""
+        try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Controller.__init__ starting")
+            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
+            print(f"[DEBUG] Is main thread: {threading.current_thread() is threading.main_thread()}")
+            print("[DEBUG] ========================================")
+            
+            self.settings = settings
+            self.page = page
+            self.pause_state = {}
+            self.current_mode = None
+            self.gui_instance = None  # Track GUI instance if in GUI mode
+            
+            # Initialize components that don't need controller reference
+            print("[DEBUG] Initializing independent components...")
+            self.logs_manager = LogsManager(settings)
+            self.telemetry = TelemetryManager(settings)
+            print("[DEBUG] Independent components initialized")
+            
+            # Initialize task manager with self reference
+            print("[DEBUG] Initializing TaskManager...")
+            self.task_manager = TaskManager(controller=self)
+            print("[DEBUG] TaskManager initialized")
+            
+            # Initialize agents that need controller reference
+            print("[DEBUG] Initializing agents...")
+            self.linkedin_agent = LinkedInAgent(
+                page=self.page,
+                controller=self,
+                logs_manager=self.logs_manager
+            )
+            self.credentials_agent = CredentialsAgent(settings=self.settings, logs_manager=self.logs_manager)
+            self.tracker_agent = TrackerAgent(settings=self.settings, logs_manager=self.logs_manager)
+            self.cv_parser = CVParserAgent(settings=self.settings, logs_manager=self.logs_manager)
+            self.ai_navigator = AINavigator(page=self.page, settings=self.settings, logs_manager=self.logs_manager)
+            self.dom_service = DomService(page=self.page, telemetry=self.telemetry, settings=self.settings, logs_manager=self.logs_manager)
+            print("[DEBUG] Agents initialized")
+            
+            print("[DEBUG] Controller initialization complete")
+            print("[DEBUG] ========================================")
+            
+        except Exception as e:
+            print("[DEBUG] ========================================")
+            print(f"[DEBUG] ERROR in Controller.__init__: {str(e)}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            raise
 
-        # Initialize AI Navigator
-        self.ai_navigator = AINavigator(
-            page=self.page,
-            settings=self.settings,
-            logs_manager=self.logs_manager,
-            min_confidence=settings.get('min_confidence', 0.8),
-            max_retries=self.max_retries
-        )
+    async def verify_gui_mode_readiness(self):
+        """Verify that the controller is ready for GUI mode operation."""
+        try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Verifying GUI mode readiness:")
+            
+            # Check TrackerAgent specifically first
+            print("[DEBUG] Checking TrackerAgent status:")
+            print(f"[DEBUG] - TrackerAgent exists: {hasattr(self, 'tracker_agent')}")
+            if hasattr(self, 'tracker_agent'):
+                print(f"[DEBUG] - TrackerAgent initialized: {self.tracker_agent is not None}")
+                print(f"[DEBUG] - TrackerAgent has lock: {hasattr(self.tracker_agent, '_lock')}")
+                print(f"[DEBUG] - TrackerAgent data dir exists: {self.tracker_agent.data_dir.exists()}")
+            
+            # Check essential components
+            components_status = {
+                "logs_manager": bool(self.logs_manager),
+                "telemetry": bool(self.telemetry),
+                "task_manager": bool(self.task_manager),
+                "tracker_agent": bool(self.tracker_agent),
+                "settings": bool(self.settings)
+            }
+            
+            print("[DEBUG] Component status:")
+            for component, status in components_status.items():
+                print(f"[DEBUG] - {component}: {'✓' if status else '✗'}")
+            
+            # Verify event loop
+            try:
+                current_loop = asyncio.get_event_loop()
+                print(f"[DEBUG] Event loop status:")
+                print(f"[DEBUG] - Loop running: {current_loop.is_running()}")
+                print(f"[DEBUG] - Loop closed: {current_loop.is_closed()}")
+            except Exception as e:
+                print(f"[DEBUG] - Event loop check failed: {str(e)}")
+            
+            # Check thread safety
+            print(f"[DEBUG] Thread information:")
+            print(f"[DEBUG] - Current thread: {threading.current_thread().name}")
+            print(f"[DEBUG] - Is main thread: {threading.current_thread() is threading.main_thread()}")
+            print(f"[DEBUG] - Active threads: {threading.active_count()}")
+            
+            all_ready = all(components_status.values())
+            print(f"[DEBUG] Overall readiness: {'Ready' if all_ready else 'Not Ready'}")
+            print("[DEBUG] ========================================")
+            
+            return all_ready
+            
+        except Exception as e:
+            print("[DEBUG] ========================================")
+            print(f"[DEBUG] ERROR in verify_gui_mode_readiness: {str(e)}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            await self.logs_manager.error(f"GUI mode readiness check failed: {str(e)}")
+            return False
 
-        # Task management and timing configurations
-        self.task_manager = TaskManager(self)
-        self.retry_delay = TimingConstants.BASE_RETRY_DELAY
-        self.action_delay = TimingConstants.ACTION_DELAY
-        self.poll_interval = TimingConstants.POLL_INTERVAL
+    async def prepare_for_gui_mode(self):
+        """Prepare the controller for GUI mode operation."""
+        try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Preparing controller for GUI mode")
+            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
+            
+            # Set mode
+            self.current_mode = 'gui'
+            print("[DEBUG] Mode set to: gui")
+            
+            # Initialize or verify components
+            if not await self.verify_gui_mode_readiness():
+                raise RuntimeError("Controller not ready for GUI mode")
+            
+            # Verify TrackerAgent specifically
+            try:
+                print("[DEBUG] Testing TrackerAgent operations...")
+                if self.tracker_agent:
+                    # Test activity logging
+                    await self.tracker_agent.log_activity(
+                        activity_type='mode_change',
+                        details='Testing TrackerAgent for GUI mode',
+                        status='testing',
+                        agent_name='Controller'
+                    )
+                    print("[DEBUG] TrackerAgent test successful")
+                else:
+                    print("[DEBUG] WARNING: TrackerAgent not available")
+            except Exception as tracker_error:
+                print(f"[DEBUG] WARNING: TrackerAgent test failed: {str(tracker_error)}")
+                # Log but don't fail - TrackerAgent issues shouldn't block GUI
+                if self.logs_manager:
+                    await self.logs_manager.warning(f"TrackerAgent test failed: {str(tracker_error)}")
+            
+            # Log preparation
+            await self.logs_manager.info("Controller prepared for GUI mode")
+            try:
+                await self.tracker_agent.log_activity(
+                    activity_type='mode_change',
+                    details='Preparing for GUI mode',
+                    status='success',
+                    agent_name='Controller'
+                )
+            except Exception as e:
+                print(f"[DEBUG] WARNING: Failed to log mode change: {str(e)}")
+            
+            print("[DEBUG] GUI mode preparation complete")
+            print("[DEBUG] ========================================")
+            
+        except Exception as e:
+            error_msg = f"Failed to prepare for GUI mode: {str(e)}"
+            print("[DEBUG] ========================================")
+            print(f"[DEBUG] ERROR: {error_msg}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
+            await self.logs_manager.error(error_msg)
+            try:
+                await self.tracker_agent.log_activity(
+                    activity_type='mode_change',
+                    details=f'GUI mode preparation failed: {str(e)}',
+                    status='error',
+                    agent_name='Controller'
+                )
+            except Exception:
+                pass  # Ignore TrackerAgent errors during error handling
+            
+            raise
 
-        # State management
-        self.pause_state = {}
+    async def register_gui_instance(self, gui_instance):
+        """Register a GUI instance with the controller."""
+        try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Registering GUI instance")
+            
+            self.gui_instance = gui_instance
+            print("[DEBUG] GUI instance registered successfully")
+            
+            # Log registration
+            await self.logs_manager.info("GUI instance registered with controller")
+            
+            print("[DEBUG] ========================================")
+            
+        except Exception as e:
+            error_msg = f"Failed to register GUI instance: {str(e)}"
+            print(f"[DEBUG] ERROR: {error_msg}")
+            await self.logs_manager.error(error_msg)
+            raise
 
-        self.telemetry = TelemetryManager(settings)
-
-        # Initialize CV Parser with settings and logs_manager
-        self.cv_parser = CVParserAgent(settings, logs_manager)
+    async def cleanup_gui_mode(self):
+        """Clean up GUI mode specific resources."""
+        try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Cleaning up GUI mode resources")
+            
+            if self.gui_instance:
+                print("[DEBUG] Clearing GUI instance reference")
+                self.gui_instance = None
+            
+            self.current_mode = None
+            print("[DEBUG] Mode cleared")
+            
+            await self.logs_manager.info("GUI mode cleanup completed")
+            print("[DEBUG] GUI mode cleanup complete")
+            print("[DEBUG] ========================================")
+            
+        except Exception as e:
+            error_msg = f"Error during GUI mode cleanup: {str(e)}"
+            print(f"[DEBUG] ERROR: {error_msg}")
+            await self.logs_manager.error(error_msg)
+            raise
 
     async def start_session(self):
         """
@@ -131,25 +311,43 @@ class Controller:
         (User is already logged into LinkedIn for MVP).
         """
         try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Controller: Starting new automation session")
+            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
+            print(f"[DEBUG] Is main thread: {threading.current_thread() is threading.main_thread()}")
+            print("[DEBUG] ========================================")
+            
             await self.logs_manager.info("Starting new automation session...")
             await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details='Session started',
-                status='success',
-                agent_name='Controller'
-            )
-            await self.logs_manager.info("Session started successfully")
+            
+            # Verify initial state
+            print("[DEBUG] Verifying initial state:")
+            print(f"[DEBUG] - Settings loaded: {bool(self.settings)}")
+            print(f"[DEBUG] - Page available: {bool(self.page)}")
+            print(f"[DEBUG] - Logs manager: {bool(self.logs_manager)}")
+            print(f"[DEBUG] - Agents initialized: {bool(self.linkedin_agent and self.tracker_agent)}")
+            print("[DEBUG] ========================================")
+            
+            # Use TemporaryBypass to skip activity tracking for session start
+            async with TemporaryBypass(self.tracker_agent):
+                await self.logs_manager.info("Session started successfully")
+                print("[DEBUG] Session started successfully")
+                print("[DEBUG] ========================================")
+            
         except Exception as e:
-            await self.logs_manager.error(f"Failed to start session: {str(e)}")
+            error_msg = f"Failed to start session: {str(e)}"
+            print("[DEBUG] ========================================")
+            print(f"[DEBUG] ERROR: {error_msg}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
+            await self.logs_manager.error(error_msg)
             await asyncio.sleep(TimingConstants.ERROR_DELAY)
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details=f'Session failed to start: {str(e)}',
-                status='error',
-                agent_name='Controller'
-            )
-            raise
+            
+            # Also bypass error activity logging
+            async with TemporaryBypass(self.tracker_agent):
+                raise
 
     async def run_linkedin_flow(self, job_title: str, location: str):
         """Example method to orchestrate searching & applying on LinkedIn."""
@@ -217,8 +415,19 @@ class Controller:
         Note: Browser cleanup is now handled at a higher level.
         """
         try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Controller: Ending automation session")
+            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
             await self.logs_manager.info("Ending automation session...")
             await asyncio.sleep(TimingConstants.ACTION_DELAY)
+            
+            # Save final state if needed
+            if hasattr(self, 'pause_state') and self.pause_state:
+                print("[DEBUG] Saving final session state...")
+                await self._save_session_state()
+            
             await self.tracker_agent.log_activity(
                 activity_type='session',
                 details='Session ended by user or completion of tasks',
@@ -226,8 +435,19 @@ class Controller:
                 agent_name='Controller'
             )
             await self.logs_manager.info("Session ended successfully")
+            
+            print("[DEBUG] Session ended successfully")
+            print("[DEBUG] ========================================")
+            
         except Exception as e:
-            await self.logs_manager.error(f"Error ending session: {str(e)}")
+            error_msg = f"Error ending session: {str(e)}"
+            print("[DEBUG] ========================================")
+            print(f"[DEBUG] ERROR: {error_msg}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
+            await self.logs_manager.error(error_msg)
             await asyncio.sleep(TimingConstants.ERROR_DELAY)
             await self.tracker_agent.log_activity(
                 activity_type='session',
@@ -242,30 +462,94 @@ class Controller:
         Pause the current tasks or flows. 
         For MVP, we simply log it. 
         """
-        await self.logs_manager.info("Pausing automation session...")
-        await asyncio.sleep(TimingConstants.ACTION_DELAY)
-        await self.tracker_agent.log_activity(
-            activity_type='session',
-            details=Messages.PAUSE_MESSAGE,
-            status='info',
-            agent_name='Controller'
-        )
-        await self.logs_manager.info("Session paused successfully")
+        try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Controller: Pausing automation session")
+            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
+            await self.logs_manager.info("Pausing automation session...")
+            await asyncio.sleep(TimingConstants.ACTION_DELAY)
+            
+            # Save current state
+            if not await self._save_session_state():
+                print("[DEBUG] WARNING: Failed to save session state during pause")
+            
+            await self.tracker_agent.log_activity(
+                activity_type='session',
+                details=Messages.PAUSE_MESSAGE,
+                status='info',
+                agent_name='Controller'
+            )
+            await self.logs_manager.info("Session paused successfully")
+            
+            print("[DEBUG] Session paused successfully")
+            print("[DEBUG] ========================================")
+            
+        except Exception as e:
+            error_msg = f"Error pausing session: {str(e)}"
+            print("[DEBUG] ========================================")
+            print(f"[DEBUG] ERROR: {error_msg}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
+            await self.logs_manager.error(error_msg)
+            await self.tracker_agent.log_activity(
+                activity_type='session',
+                details=f'Error pausing session: {str(e)}',
+                status='error',
+                agent_name='Controller'
+            )
+            raise
 
     async def resume_session(self):
         """
         Resume tasks from a paused state. 
         For MVP, we log it, but real logic is needed to continue from partial steps.
         """
-        await self.logs_manager.info("Resuming automation session...")
-        await asyncio.sleep(TimingConstants.ACTION_DELAY)
-        await self.tracker_agent.log_activity(
-            activity_type='session',
-            details=Messages.RESUME_MESSAGE,
-            status='info',
-            agent_name='Controller'
-        )
-        await self.logs_manager.info("Session resumed successfully")
+        try:
+            print("[DEBUG] ========================================")
+            print("[DEBUG] Controller: Resuming automation session")
+            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
+            await self.logs_manager.info("Resuming automation session...")
+            await asyncio.sleep(TimingConstants.ACTION_DELAY)
+            
+            # Restore previous state if available
+            if hasattr(self, 'pause_state') and self.pause_state:
+                print("[DEBUG] Attempting to restore previous session state...")
+                if not await self._restore_session_state():
+                    print("[DEBUG] WARNING: Failed to restore session state")
+            
+            await self.tracker_agent.log_activity(
+                activity_type='session',
+                details=Messages.RESUME_MESSAGE,
+                status='info',
+                agent_name='Controller'
+            )
+            await self.logs_manager.info("Session resumed successfully")
+            
+            print("[DEBUG] Session resumed successfully")
+            print("[DEBUG] ========================================")
+            
+        except Exception as e:
+            error_msg = f"Error resuming session: {str(e)}"
+            print("[DEBUG] ========================================")
+            print(f"[DEBUG] ERROR: {error_msg}")
+            print(f"[DEBUG] Exception type: {type(e).__name__}")
+            print(f"[DEBUG] Thread: {threading.current_thread().name}")
+            print("[DEBUG] ========================================")
+            
+            await self.logs_manager.error(error_msg)
+            await self.tracker_agent.log_activity(
+                activity_type='session',
+                details=f'Error resuming session: {str(e)}',
+                status='error',
+                agent_name='Controller'
+            )
+            raise
 
     async def handle_job_application(self, job_url: str, cv_path: str | Path):
         """
