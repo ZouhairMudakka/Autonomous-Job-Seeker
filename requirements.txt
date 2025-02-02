@@ -47,6 +47,7 @@ python-pdf>=0.39      # PDF processing
 tabula-py>=2.9.0      # PDF table extraction
 pytesseract>=0.3.10   # OCR for images
 PyPDF2>=3.0.0         # For PDF processing
+matplotlib>=3.7.2     # For plotting
 
 
 # LangChain & AI
