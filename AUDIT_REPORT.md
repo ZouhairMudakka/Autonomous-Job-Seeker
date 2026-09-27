@@ -35,7 +35,7 @@ This is a source and regression audit of the current tree, not a penetration tes
 
 ## Verification
 
-- Python offline suite: 156 passed, 15 explicitly skipped (14 display tests and one live website/provider diagnostic).
+- Python offline suite: 158 passed, 15 explicitly skipped (14 display tests and one live website/provider diagnostic).
 - Extension JavaScript: 6 tests passed.
 - Ruff syntax/undefined-name checks passed.
 - Synthetic offline Edge/Playwright checks passed for DOM reconstruction, repeated highlight cleanup, secret filtering, presence detection, and confirmed form submission against local HTML.

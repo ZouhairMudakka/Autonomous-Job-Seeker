@@ -293,7 +293,9 @@ class BrowserSetup:
                     print(f"Error: {str(e)}. Please try again.")  # Keep print for immediate user feedback
                     await self.logs_manager.error(f"Browser selection error: {str(e)}")
         else:
-            self.browser_type = self.settings.get('type')
+            # settings normalizes Edge/Chrome to Playwright's "chromium" type;
+            # retain the requested channel for launch/profile selection.
+            self.browser_type = (self.settings.get('raw_type') or self.settings.get('type')).lower()
             attach_existing = self.settings.get('attach_existing', attach_existing)
             await self.logs_manager.info(f"Using configured browser: {self.browser_type}")
 

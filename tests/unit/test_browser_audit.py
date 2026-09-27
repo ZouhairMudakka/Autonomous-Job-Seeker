@@ -515,3 +515,20 @@ async def test_cancelled_cookie_save_still_closes_owned_browser(logs, tmp_path):
         await setup.cleanup(resource, AsyncMock())
     resource.close.assert_awaited_once()
     driver.stop.assert_awaited_once()
+
+
+@pytest.mark.parametrize('browser_name,channel', [('edge', 'msedge'), ('chrome', 'chrome')])
+async def test_normalized_browser_settings_preserve_requested_channel(logs, tmp_path, monkeypatch, browser_name, channel):
+    import utils.browser_setup as module
+    page = AsyncMock()
+    context = SimpleNamespace(pages=[page])
+    launch = AsyncMock(return_value=context)
+    driver = SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=launch))
+    monkeypatch.setattr(module, 'async_playwright', lambda: SimpleNamespace(start=AsyncMock(return_value=driver)))
+    setup = BrowserSetup({'browser': {'type': 'chromium', 'raw_type': browser_name, 'should_prompt': False,
+                                     'data_dir': str(tmp_path)}, 'telemetry': {'enabled': False}}, logs)
+    setup._configure_page = AsyncMock()
+    setup._get_browser_path = MagicMock(return_value=None)
+    await setup.initialize()
+    assert setup.browser_type == browser_name
+    assert launch.call_args.kwargs['channel'] == channel
