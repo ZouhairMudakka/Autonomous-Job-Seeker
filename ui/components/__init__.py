@@ -13,20 +13,20 @@ __all__ = [
     # Job Processing
     'JobProcessingView',
     'JobCard',
-    
+
     # AI Decision
     'AIDecisionView',
     'AIDecision',
-    
+
     # Platform Management
     'PlatformManagerView',
     'PlatformConfig',
     'PlatformStatus',
-    
+
     # Analytics
     'AnalyticsDashboard',
     'JobMarketMetrics',
-    
+
     # Profile Management
     'ProfileManagerView',
     'ProfileVersion'
@@ -35,4 +35,4 @@ __all__ = [
 # Future imports for components like:
 # from .job_processing import JobProcessingView
 # from .analytics import AnalyticsDashboard
-# etc. 
+# etc.

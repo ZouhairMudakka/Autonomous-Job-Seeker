@@ -37,18 +37,19 @@ import tkinter as tk
 from tkinter import ttk, Entry, StringVar
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from threading import Lock
+from .ui_dispatch import UIUpdateDispatcher
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 
-@dataclass
+@dataclass(init=False)
 class JobMarketMetrics:
     """Data structure for job market analytics information.
-    
+
     Attributes:
         total_jobs: Total number of jobs processed
         total_applications: Total number of applications submitted
@@ -68,18 +69,33 @@ class JobMarketMetrics:
     geographic_distribution: Dict[str, int]
     timestamp: datetime
 
-class AnalyticsDashboard(ttk.Frame):
+    def __init__(self, total_jobs, total_applications=None, success_rate=0.0,
+                 avg_response_time=0.0, skills_demand=None, salary_ranges=None,
+                 geographic_distribution=None, timestamp=None, *, applications_sent=None,
+                 skill_demand=None, locations=None):
+        self.total_jobs = total_jobs
+        self.total_applications = total_applications if total_applications is not None else (applications_sent or 0)
+        self.success_rate = success_rate
+        self.avg_response_time = (avg_response_time.total_seconds() / 3600
+                                  if isinstance(avg_response_time, timedelta) else avg_response_time)
+        self.skills_demand = dict(skills_demand if skills_demand is not None else (skill_demand or {}))
+        self.salary_ranges = dict(salary_ranges or {})
+        self.geographic_distribution = dict(geographic_distribution if geographic_distribution is not None else (locations or {}))
+        self.timestamp = timestamp or datetime.now()
+
+class AnalyticsDashboard(UIUpdateDispatcher, ttk.Frame):
     """A component for visualizing job market analytics in real-time."""
-    
+
     def __init__(self, parent, *args, **kwargs):
         """Initialize the AnalyticsDashboard.
-        
+
         Args:
             parent: The parent widget
             *args: Variable length argument list
             **kwargs: Arbitrary keyword arguments
         """
         super().__init__(parent, *args, **kwargs)
+        self._init_ui_dispatcher()
         self.metrics_history: List[JobMarketMetrics] = []
         self._update_lock = Lock()  # For thread-safe updates
         self._setup_ui()
@@ -91,22 +107,22 @@ class AnalyticsDashboard(ttk.Frame):
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Overview Tab
         self.overview_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.overview_frame, text="Overview")
         self._setup_overview_tab()
-        
+
         # Skills Analysis Tab
         self.skills_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.skills_frame, text="Skills Analysis")
         self._setup_skills_tab()
-        
+
         # Salary Analysis Tab
         self.salary_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.salary_frame, text="Salary Analysis")
         self._setup_salary_tab()
-        
+
         # Geographic Analysis Tab
         self.geo_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.geo_frame, text="Geographic Analysis")
@@ -117,23 +133,23 @@ class AnalyticsDashboard(ttk.Frame):
         # Key Metrics Section
         metrics_frame = ttk.LabelFrame(self.overview_frame, text="Key Metrics")
         metrics_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         self.total_jobs_label = ttk.Label(metrics_frame, text="Total Jobs: 0")
         self.total_jobs_label.pack(padx=5, pady=2)
-        
+
         self.applications_label = ttk.Label(metrics_frame, text="Applications: 0")
         self.applications_label.pack(padx=5, pady=2)
-        
+
         self.success_rate_label = ttk.Label(metrics_frame, text="Success Rate: 0%")
         self.success_rate_label.pack(padx=5, pady=2)
-        
+
         self.response_time_label = ttk.Label(metrics_frame, text="Avg Response: 0h")
         self.response_time_label.pack(padx=5, pady=2)
-        
+
         # Trend Chart
         trend_frame = ttk.LabelFrame(self.overview_frame, text="Trends")
         trend_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         self.trend_figure = Figure(figsize=(6, 4), dpi=100)
         self.trend_canvas = FigureCanvasTkAgg(self.trend_figure, trend_frame)
         self.trend_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -143,7 +159,7 @@ class AnalyticsDashboard(ttk.Frame):
         # Filter Section
         filter_frame = ttk.Frame(self.skills_frame)
         filter_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         ttk.Label(filter_frame, text="Filter Skills:").pack(side=tk.LEFT, padx=5)
         self.skills_filter = StringVar()
         self.skills_entry = ttk.Entry(
@@ -151,7 +167,7 @@ class AnalyticsDashboard(ttk.Frame):
             textvariable=self.skills_filter
         )
         self.skills_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        
+
         # Skills Chart
         self.skills_figure = Figure(figsize=(6, 4), dpi=100)
         self.skills_canvas = FigureCanvasTkAgg(self.skills_figure, self.skills_frame)
@@ -168,7 +184,7 @@ class AnalyticsDashboard(ttk.Frame):
         # Region Selector
         selector_frame = ttk.Frame(self.geo_frame)
         selector_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         ttk.Label(selector_frame, text="Region:").pack(side=tk.LEFT, padx=5)
         self.region_var = StringVar()
         self.region_combo = ttk.Combobox(
@@ -177,7 +193,7 @@ class AnalyticsDashboard(ttk.Frame):
             state="readonly"
         )
         self.region_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        
+
         # Geographic Chart
         self.geo_figure = Figure(figsize=(6, 4), dpi=100)
         self.geo_canvas = FigureCanvasTkAgg(self.geo_figure, self.geo_frame)
@@ -190,7 +206,7 @@ class AnalyticsDashboard(ttk.Frame):
         self.skills_canvas.get_tk_widget().bind("<Configure>", lambda e: self._update_skills_chart())
         self.salary_canvas.get_tk_widget().bind("<Configure>", lambda e: self._update_salary_chart())
         self.geo_canvas.get_tk_widget().bind("<Configure>", lambda e: self._update_geo_chart())
-        
+
         # Bind filter and selection changes
         self.skills_filter.trace_add("write", lambda *args: self._update_skills_chart())
         self.region_var.trace_add("write", lambda *args: self._update_geo_chart())
@@ -202,19 +218,19 @@ class AnalyticsDashboard(ttk.Frame):
     def _auto_refresh(self):
         """Perform automatic refresh of charts every 30 seconds."""
         self.schedule_ui_update(self._refresh_all_charts)
-        self.after(30000, self._auto_refresh)  # 30 seconds
+        self._auto_refresh_id = self.after(30000, self._auto_refresh)  # 30 seconds
 
     def schedule_ui_update(self, update_func: Callable):
         """Schedule a UI update to run on the main thread.
-        
+
         Args:
             update_func: The function to run on the main thread
         """
-        self.after_idle(update_func)
+        super().schedule_ui_update(update_func)
 
     def update_metrics(self, metrics: JobMarketMetrics):
         """Update the dashboard with new metrics data.
-        
+
         Args:
             metrics: The JobMarketMetrics instance to display
         """
@@ -239,33 +255,33 @@ class AnalyticsDashboard(ttk.Frame):
         """Update the overview tab with latest metrics."""
         if not self.metrics_history:
             return
-        
+
         try:
             latest = self.metrics_history[-1]
-            
+
             # Update labels
             self.total_jobs_label.config(text=f"Total Jobs: {latest.total_jobs:,}")
             self.applications_label.config(text=f"Applications: {latest.total_applications:,}")
             self.success_rate_label.config(text=f"Success Rate: {latest.success_rate:.1%}")
             self.response_time_label.config(text=f"Avg Response: {latest.avg_response_time:.1f}h")
-            
+
             # Update trend chart
             self.trend_figure.clear()
             ax = self.trend_figure.add_subplot(111)
-            
+
             dates = [m.timestamp for m in self.metrics_history]
             jobs = [m.total_jobs for m in self.metrics_history]
             apps = [m.total_applications for m in self.metrics_history]
-            
+
             ax.plot(dates, jobs, 'b-', label='Jobs')
             ax.plot(dates, apps, 'g-', label='Applications')
-            
+
             ax.set_title('Job Market Trends')
             ax.set_xlabel('Time')
             ax.set_ylabel('Count')
             ax.legend()
             ax.grid(True)
-            
+
             self.trend_figure.tight_layout()
             self.trend_canvas.draw()
         except Exception as e:
@@ -275,17 +291,17 @@ class AnalyticsDashboard(ttk.Frame):
         """Update the skills analysis chart with filtered data."""
         if not self.metrics_history:
             return
-        
+
         try:
             latest = self.metrics_history[-1]
             filter_text = self.skills_filter.get().lower()
-            
+
             # Filter skills based on search
             skills = {
                 k: v for k, v in latest.skills_demand.items()
                 if filter_text in k.lower()
             }
-            
+
             if not skills:
                 # Show placeholder when no skills match filter
                 self.skills_figure.clear()
@@ -300,15 +316,15 @@ class AnalyticsDashboard(ttk.Frame):
                 # Create horizontal bar chart
                 self.skills_figure.clear()
                 ax = self.skills_figure.add_subplot(111)
-                
+
                 y_pos = np.arange(len(skills))
                 ax.barh(y_pos, list(skills.values()))
                 ax.set_yticks(y_pos)
                 ax.set_yticklabels(list(skills.keys()))
-                
+
                 ax.set_title('Skills Demand Analysis')
                 ax.set_xlabel('Demand Score')
-                
+
             self.skills_figure.tight_layout()
             self.skills_canvas.draw()
         except Exception as e:
@@ -318,34 +334,34 @@ class AnalyticsDashboard(ttk.Frame):
         """Update the salary analysis chart."""
         if not self.metrics_history:
             return
-        
+
         try:
             latest = self.metrics_history[-1]
-            
+
             self.salary_figure.clear()
             ax = self.salary_figure.add_subplot(111)
-            
+
             positions = list(latest.salary_ranges.keys())
             mins = [r[0] for r in latest.salary_ranges.values()]
             maxs = [r[1] for r in latest.salary_ranges.values()]
-            
+
             x = np.arange(len(positions))
             width = 0.35
-            
+
             ax.bar(x - width/2, mins, width, label='Minimum')
             ax.bar(x + width/2, maxs, width, label='Maximum')
-            
+
             ax.set_title('Salary Ranges by Position')
             ax.set_xticks(x)
             ax.set_xticklabels(positions)
             ax.set_ylabel('Salary ($)')
             ax.legend()
-            
+
             # Format y-axis as currency
             ax.yaxis.set_major_formatter(
                 plt.FuncFormatter(lambda x, p: f'${x:,.0f}')
             )
-            
+
             self.salary_figure.tight_layout()
             self.salary_canvas.draw()
         except Exception as e:
@@ -355,39 +371,37 @@ class AnalyticsDashboard(ttk.Frame):
         """Update the geographic analysis chart."""
         if not self.metrics_history:
             return
-        
+
         try:
             latest = self.metrics_history[-1]
-            
+
             # Update region combobox if needed
             regions = list(latest.geographic_distribution.keys())
-            if self.region_combo['values'] != regions:
+            if tuple(self.region_combo['values']) != tuple(regions):
                 self.region_combo['values'] = regions
                 if regions and not self.region_var.get():
                     self.region_var.set(regions[0])
-            
+
             self.geo_figure.clear()
             ax = self.geo_figure.add_subplot(111)
-            
+
             selected_region = self.region_var.get()
             data = latest.geographic_distribution
-            
+
             if selected_region:
                 # Show detailed view for selected region
                 nearby_regions = {
                     k: v for k, v in data.items()
                     if k == selected_region or v > data.get(selected_region, 0) * 0.5
                 }
-                
+
                 sizes = list(nearby_regions.values())
                 labels = list(nearby_regions.keys())
-                
-                ax.pie(
-                    sizes,
-                    labels=labels,
-                    autopct='%1.1f%%',
-                    startangle=90
-                )
+
+                if sizes and sum(sizes) > 0:
+                    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90)
+                else:
+                    ax.text(0.5, 0.5, 'No jobs in this region', ha='center', va='center')
                 ax.set_title(f'Job Distribution - {selected_region} Region')
             else:
                 ax.text(
@@ -396,7 +410,7 @@ class AnalyticsDashboard(ttk.Frame):
                     ha='center',
                     va='center'
                 )
-            
+
             self.geo_figure.tight_layout()
             self.geo_canvas.draw()
         except Exception as e:
@@ -418,9 +432,9 @@ class AnalyticsDashboard(ttk.Frame):
         self.applications_label.config(text="Applications: 0")
         self.success_rate_label.config(text="Success Rate: 0%")
         self.response_time_label.config(text="Avg Response: 0h")
-        
+
         # Clear charts
         for fig in [self.trend_figure, self.skills_figure,
                    self.salary_figure, self.geo_figure]:
             fig.clear()
-            fig.canvas.draw() 
+            fig.canvas.draw()

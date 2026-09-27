@@ -53,7 +53,10 @@ Notes:
 """
 
 import pytest
-import tkinter as tk
+try:
+    import tkinter as tk
+except ImportError:
+    tk = None
 import os
 import sys
 from pathlib import Path
@@ -62,9 +65,20 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-# Add pytest-asyncio configuration
-pytest_plugins = ["pytest_asyncio"]
-asyncio_default_fixture_loop_scope = "function"
+def pytest_addoption(parser):
+    parser.addoption("--run-gui", action="store_true", help="Run Tk display tests")
+    parser.addoption("--run-live", action="store_true", help="Run live browser/provider tests")
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if item.path.name in {"test_components.py", "test_tkinter.py"}:
+            item.add_marker(pytest.mark.gui)
+        if item.path.name == "test_dom_features.py":
+            item.add_marker(pytest.mark.live)
+        for marker in ("gui", "live"):
+            if marker in item.keywords and not config.getoption(f"--run-{marker}"):
+                item.add_marker(pytest.mark.skip(reason=f"Requires --run-{marker}"))
 
 @pytest.fixture(scope="session")
 def test_env():
@@ -77,15 +91,15 @@ def test_env():
         'LOG_LEVEL': 'DEBUG',
         'PYTEST_RUNNING': 'true'
     }
-    
+
     # Set test env vars
     for key, value in test_vars.items():
         if key in os.environ:
             original_env[key] = os.environ[key]
         os.environ[key] = value
-    
+
     yield test_vars
-    
+
     # Restore original env vars
     for key in test_vars:
         if key in original_env:
@@ -110,12 +124,13 @@ def resource_path():
 def auto_cleanup_tk():
     """Automatically clean up Tkinter windows after each test."""
     yield
-    for window in tk._default_root.children.copy():
-        if isinstance(window, tk.Toplevel):
-            window.destroy()
-    if tk._default_root:
-        tk._default_root.destroy()
-        tk._default_root = None
+    if tk is not None and tk._default_root is not None:
+        try:
+            tk._default_root.destroy()
+        except tk.TclError:
+            pass
+        finally:
+            tk._default_root = None
 
 @pytest.fixture
 def mock_settings():
@@ -146,11 +161,11 @@ def temp_workspace(tmp_path):
     """Create a temporary workspace for file operations."""
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
-    
+
     # Create common subdirectories
     (workspace / 'data').mkdir()
     (workspace / 'logs').mkdir()
     (workspace / 'config').mkdir()
     (workspace / 'temp').mkdir()
-    
-    yield workspace 
+
+    yield workspace

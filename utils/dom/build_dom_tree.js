@@ -12,9 +12,9 @@
 
 // Logging bridge function that will be injected by Python
 let logToPython = (level, message) => {
-    // Default implementation logs to console
-    // This will be overridden by Python code
-    console[level](`[DOM Tree] ${message}`);
+    if (typeof window.logToPython === 'function') {
+        window.logToPython(level, message);
+    }
 };
 
 // Logging helper functions
@@ -47,22 +47,23 @@ function logWarning(message) {
 function clearHighlightContainer() {
   const container = document.getElementById("dom-highlight-container");
   if (container) container.remove();
+  document.querySelectorAll('[data-highlight-index]').forEach(el => el.removeAttribute('data-highlight-index'));
 }
 
 // Basic check for clickable
 function isClickableElement(el) {
     try {
         const tag = el.tagName.toLowerCase();
-        
+
         // Common clickable elements
         if (["a", "button", "input", "select", "textarea"].includes(tag)) return true;
-        
+
         // Elements with click-related attributes
-        if (el.hasAttribute("onclick") || 
-            el.hasAttribute("ng-click") || 
+        if (el.hasAttribute("onclick") ||
+            el.hasAttribute("ng-click") ||
             el.hasAttribute("@click") ||
             el.hasAttribute("v-on:click")) return true;
-            
+
         // Elements with interactive roles
         const interactiveRoles = [
             "button", "link", "menuitem", "tab", "menuitemcheckbox",
@@ -70,18 +71,18 @@ function isClickableElement(el) {
         ];
         const role = el.getAttribute("role");
         if (role && interactiveRoles.includes(role)) return true;
-        
+
         // Check for event listeners (if possible)
         const style = window.getComputedStyle(el);
         if (style.cursor === "pointer") return true;
-        
+
         // Check for specific classes that might indicate clickability
-        const classNames = el.className.split(" ");
+        const classNames = (el.getAttribute('class') || '').split(" ");
         const clickableClasses = ["btn", "button", "clickable", "link"];
         if (classNames.some(cls => clickableClasses.some(clickable => cls.toLowerCase().includes(clickable)))) {
             return true;
         }
-        
+
         // Input types that are clickable
         if (tag === "input") {
             const inputType = el.getAttribute("type");
@@ -95,54 +96,54 @@ function isClickableElement(el) {
         return false;
     }
 }
-  
+
 // Basic check for visible
 function isVisibleElement(el) {
     try {
         // Get element's bounding box
         const rect = el.getBoundingClientRect();
-        
+
         // Check for zero dimensions
         if (rect.width === 0 || rect.height === 0) return false;
-        
+
         // Get computed style
         const style = window.getComputedStyle(el);
-        
+
         // Check basic visibility properties
-        if (style.display === "none" || 
-            style.visibility === "hidden" || 
-            style.visibility === "collapse" || 
+        if (style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.visibility === "collapse" ||
             parseFloat(style.opacity) === 0) {
             return false;
         }
-        
+
         // Check if element is detached from DOM
         if (!document.body.contains(el)) return false;
-        
+
         // Check if any parent element makes this invisible
         let parent = el.parentElement;
         while (parent && parent !== document.body) {
             const parentStyle = window.getComputedStyle(parent);
-            if (parentStyle.display === "none" || 
-                parentStyle.visibility === "hidden" || 
+            if (parentStyle.display === "none" ||
+                parentStyle.visibility === "hidden" ||
                 parseFloat(parentStyle.opacity) === 0) {
                 return false;
             }
             parent = parent.parentElement;
         }
-        
+
         // Check if element is off-screen (far outside viewport)
         const vpWidth = window.innerWidth;
         const vpHeight = window.innerHeight;
         const offset = 10000; // reasonable offset for elements that might be scrolled into view
-        
-        if (rect.right < -offset || 
-            rect.bottom < -offset || 
-            rect.left > vpWidth + offset || 
+
+        if (rect.right < -offset ||
+            rect.bottom < -offset ||
+            rect.left > vpWidth + offset ||
             rect.top > vpHeight + offset) {
             return false;
         }
-        
+
         return true;
     } catch (error) {
         logError("Error in isVisibleElement", error);
@@ -150,42 +151,35 @@ function isVisibleElement(el) {
     }
 }
 
-// Cache viewport dimensions and update on resize
-let vpWidth = window.innerWidth;
-let vpHeight = window.innerHeight;
-
-window.addEventListener('resize', () => {
-    vpWidth = window.innerWidth;
-    vpHeight = window.innerHeight;
-});
-
 function isInViewport(el) {
     try {
+        const vpWidth = window.innerWidth;
+        const vpHeight = window.innerHeight;
         const rect = el.getBoundingClientRect();
-        
+
         // Consider partial overlap with viewport
         // Add small margin to account for elements right at the edge
         const margin = 2; // 2px margin
-        
+
         const inHorizView = (
-            (rect.left < vpWidth + margin) && 
+            (rect.left < vpWidth + margin) &&
             ((rect.left + rect.width) > -margin)
         );
-        
+
         const inVertView = (
-            (rect.top < vpHeight + margin) && 
+            (rect.top < vpHeight + margin) &&
             ((rect.top + rect.height) > -margin)
         );
-        
+
         // Check if element has meaningful size
         const hasSize = (rect.width >= 1 && rect.height >= 1);
-        
+
         // Check if element is reasonably positioned
         const isReasonablyPositioned = (
-            Math.abs(rect.left) < 10000 && 
+            Math.abs(rect.left) < 10000 &&
             Math.abs(rect.top) < 10000
         );
-        
+
         return inHorizView && inVertView && hasSize && isReasonablyPositioned;
     } catch (error) {
         logError("Error in isInViewport", error);
@@ -204,6 +198,7 @@ const HIGHLIGHT_COLORS = [
 
 function highlightElement(el, highlightIndex) {
     try {
+        el.setAttribute('data-highlight-index', String(highlightIndex));
         // Get or create container
         let container = document.getElementById("dom-highlight-container");
         if (!container) {
@@ -269,7 +264,7 @@ function highlightElement(el, highlightIndex) {
  */
 function buildDomTree(root, doHighlight, maxHighlight) {
   logInfo(`Starting DOM tree build with highlight=${doHighlight}, maxHighlight=${maxHighlight}`);
-  
+
   // Clear existing highlights
   clearHighlightContainer();
   logDebug("Cleared existing highlight container");
@@ -288,6 +283,8 @@ function buildDomTree(root, doHighlight, maxHighlight) {
 
     if (node.nodeType === Node.ELEMENT_NODE) {
       const tag = node.tagName.toLowerCase();
+      if (['script', 'style', 'noscript'].includes(tag) ||
+          (tag === 'input' && node.type === 'hidden')) return null;
       const visible = isVisibleElement(node);
       const clickable = isClickableElement(node);
       const inViewport = visible && isInViewport(node);
@@ -304,11 +301,14 @@ function buildDomTree(root, doHighlight, maxHighlight) {
 
       // Add attributes
       for (const attr of node.attributes) {
+        // Form contents and credentials do not belong in agent DOM snapshots.
+        if (attr.name === 'value' || /token|secret|password|authorization/i.test(attr.name)) continue;
         elementData.attributes[attr.name] = attr.value;
       }
 
       // Recurse for children
       for (const child of node.childNodes) {
+        if (tag === 'textarea') continue;
         const childData = traverse(child);
         if (childData) {
           elementData.children.push(childData);
@@ -334,7 +334,7 @@ function buildDomTree(root, doHighlight, maxHighlight) {
   // Now we handle highlighting if doHighlight is true
   if (doHighlight) {
     logDebug("Starting element highlighting");
-    
+
     // Sort clickableElements
     clickableElements.sort((a, b) => {
       const aInView = a.elementData.isInViewport ? 1 : 0;
@@ -359,10 +359,9 @@ function buildDomTree(root, doHighlight, maxHighlight) {
       elementData.highlightIndex = highlightCount;
       highlightCount++;
     }
-    
+
     logInfo(`Highlighted ${highlightCount} elements`);
   }
 
   return tree;
 }
-  

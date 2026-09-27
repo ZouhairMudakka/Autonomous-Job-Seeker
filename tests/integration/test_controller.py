@@ -1,85 +1,125 @@
-"""
-Integration Tests for Controller
+"""Offline controller integration against real component wiring."""
 
-Tests the interaction between the async controller and its agents.
-"""
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-import asyncio
-from unittest.mock import MagicMock, patch
 
-# If your orchestrator.controller is async-based
 from orchestrator.controller import Controller
 
-# We assume you have "pytest-asyncio" installed if we do async tests
-@pytest.mark.asyncio
+
 @pytest.fixture
-async def controller():
-    """
-    Creates a Controller instance with test settings, optionally does any async init if needed.
-    """
+def controller(tmp_path):
     settings = {
-        'linkedin': {
-            'email': 'test@example.com',
-            'password': 'test_password'
-        },
-        'data_dir': 'tests/fixtures/data',  # Test-only directory
-        'log_level': 'DEBUG'
+        'system': {'data_dir': str(tmp_path)},
+        'data_dir': str(tmp_path),
+        'telemetry': {'enabled': False, 'storage_path': str(tmp_path / 'telemetry')},
     }
-    # Create controller instance
-    ctrl = Controller(settings)
-    # If controller has an async init method, you could do:
-    # await ctrl.some_async_init()
+    logs = SimpleNamespace(**{name: AsyncMock() for name in
+                             ('info', 'debug', 'warning', 'error', 'initialize', 'shutdown')})
+    ctrl = Controller(settings, page=SimpleNamespace(url='https://www.linkedin.com/jobs/'),
+                      logs_manager=logs)
+    ctrl.tracker_agent.log_activity = AsyncMock()
     return ctrl
 
-@pytest.mark.asyncio
-async def test_start_session(controller):
-    """
-    Tests that starting a session logs the right tracker activity.
-    """
-    # Mock out tracker to ensure we can verify calls
-    with patch.object(controller.tracker_agent, 'log_activity', new_callable=MagicMock) as mock_log:
-        await controller.start_session()  # call the async version
-
-        # Ensure log_activity was called
-        mock_log.assert_awaited()
-        # Optionally check the exact call details
-        call_args = mock_log.call_args_list[0][0]  # first call's positional args
-        call_kwargs = mock_log.call_args_list[0][1]  # first call's keyword args
-
-        # Validate we see 'Session started'
-        assert 'Session started' in call_kwargs['details']
-        assert call_kwargs['activity_type'] == 'session'
-        assert call_kwargs['status'] == 'success'
 
 @pytest.mark.asyncio
-async def test_run_linkedin_flow(controller):
-    """
-    Example test to see if run_linkedin_flow method attempts a search/apply.
-    We patch the LinkedInAgent to avoid real network calls.
-    """
-    with patch.object(controller.linkedin_agent, 'search_jobs_and_apply', new_callable=MagicMock) as mock_search:
-        # Also patch tracker
-        with patch.object(controller.tracker_agent, 'log_activity', new_callable=MagicMock) as mock_log:
-            await controller.run_linkedin_flow("Software Engineer", "Test City")
+async def test_start_session_uses_shared_logger_and_records_session(controller):
+    await controller.start_session()
+    controller.logs_manager.initialize.assert_not_awaited()
+    controller.tracker_agent.log_activity.assert_awaited_once_with(
+        activity_type='session', details='Session started', status='success',
+        agent_name='Controller',
+    )
+    assert controller.credentials_agent.dom_service is controller.dom_service
 
-            # Check the agent was called
-            mock_search.assert_awaited_once_with("Software Engineer", "Test City")
-
-            # Check logging
-            mock_log.assert_awaited()
-            # You can check specific call details if desired
 
 @pytest.mark.asyncio
-async def test_end_session(controller):
-    """
-    Verifies we can end a session properly.
-    """
-    with patch.object(controller.tracker_agent, 'log_activity', new_callable=MagicMock) as mock_log:
-        await controller.end_session()
+async def test_run_linkedin_flow_calls_full_search_and_passes_parameters(controller):
+    controller.linkedin_agent.search_jobs_and_apply = AsyncMock(return_value=None)
+    await controller.run_linkedin_flow('Software Engineer', 'Test City')
+    controller.linkedin_agent.search_jobs_and_apply.assert_awaited_once_with(
+        'Software Engineer', 'Test City')
+    assert controller.settings['job_title'] == 'Software Engineer'
+    assert controller.settings['location'] == 'Test City'
+    assert len(controller.task_manager.tasks) == 1
+    assert next(iter(controller.task_manager.tasks.values())).status == 'completed'
 
-        # Check tracker log call for session ended
-        assert mock_log.await_count == 1
-        args, kwargs = mock_log.call_args
-        assert 'Session ended' in kwargs['details']
-        assert kwargs['status'] == 'success'
+
+@pytest.mark.asyncio
+async def test_run_linkedin_flow_does_not_retry_uncertain_application_failure(controller):
+    controller.linkedin_agent.search_jobs_and_apply = AsyncMock(side_effect=RuntimeError('connection lost'))
+    with pytest.raises(RuntimeError, match='connection lost'):
+        await controller.run_linkedin_flow('Engineer', 'Remote')
+    controller.linkedin_agent.search_jobs_and_apply.assert_awaited_once()
+    assert next(iter(controller.task_manager.tasks.values())).status == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_end_session_cancels_active_flow_and_preserves_shared_logger(controller):
+    await controller.start_session()
+    entered, cleaned = asyncio.Event(), asyncio.Event()
+
+    async def search(_title, _location):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    controller.linkedin_agent.search_jobs_and_apply = search
+    flow = asyncio.create_task(controller.run_linkedin_flow('Engineer', 'Remote'))
+    await entered.wait()
+    await controller.end_session()
+    assert flow.cancelled()
+    assert cleaned.is_set()
+    assert not controller.task_manager.active_tasks
+    controller.logs_manager.shutdown.assert_not_awaited()
+    assert controller.tracker_agent.log_activity.call_args.kwargs['details'] == 'Session ended'
+
+
+@pytest.mark.asyncio
+async def test_owned_logger_is_initialized_and_closed(tmp_path):
+    ctrl = Controller({'system': {'data_dir': str(tmp_path)}, 'data_dir': str(tmp_path),
+                       'telemetry': {'enabled': False, 'storage_path': str(tmp_path / 'telemetry')}})
+    ctrl.logs_manager.initialize = AsyncMock()
+    ctrl.logs_manager.shutdown = AsyncMock()
+    ctrl.logs_manager.info = AsyncMock()
+    ctrl.tracker_agent.log_activity = AsyncMock()
+    await ctrl.start_session()
+    await ctrl.end_session()
+    ctrl.logs_manager.initialize.assert_awaited_once()
+    ctrl.logs_manager.shutdown.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_repeated_session_lifecycle_is_idempotent_and_clears_pause(controller):
+    await controller.start_session()
+    await controller.start_session()
+    assert controller.tracker_agent.log_activity.await_count == 1
+    controller._save_session_state = AsyncMock(return_value=True)
+    await controller.pause_session()
+    assert controller.linkedin_agent.is_paused
+    await controller.end_session()
+    ended_count = controller.tracker_agent.log_activity.await_count
+    await controller.end_session()
+    assert controller.tracker_agent.log_activity.await_count == ended_count
+    await controller.start_session()
+    assert not controller.linkedin_agent.is_paused
+    assert controller._resume_event.is_set()
+    await controller.end_session()
+
+
+@pytest.mark.asyncio
+async def test_job_flow_does_not_inherit_short_generic_task_deadline(controller):
+    controller.task_manager.task_timeout = 0.001
+
+    async def search(_title, _location):
+        await asyncio.sleep(0.01)
+        return 'done'
+
+    controller.linkedin_agent.search_jobs_and_apply = search
+    assert await controller.run_linkedin_flow('Engineer', 'Remote') == 'done'
+    controller.settings['job_search_timeout_seconds'] = 0.001
+    with pytest.raises(asyncio.TimeoutError):
+        await controller.run_linkedin_flow('Engineer', 'Remote')

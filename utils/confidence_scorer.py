@@ -29,8 +29,6 @@ TODO (AI Integration):
 - Add performance monitoring
 """
 
-import os
-import random
 
 from storage.learning_pipeline import LearningPipeline
 from utils.telemetry import TelemetryManager
@@ -43,7 +41,7 @@ class ConfidenceScorer:
     of heuristic (historical) data and optional GPT logic.
     """
 
-    def __init__(self, 
+    def __init__(self,
                  learning_pipeline: LearningPipeline,
                  logs_manager: LogsManager,
                  use_gpt: bool = False,
@@ -104,8 +102,12 @@ class ConfidenceScorer:
             final_conf = heuristic_conf
             await self.logs_manager.debug("Using heuristic confidence only (GPT disabled)")
 
-        await self.calculate_confidence(action, context)
         final_conf = max(0.0, min(1.0, final_conf))  # clamp to [0,1]
+        await self.telemetry.track_event(
+            event_type="confidence_calculation",
+            data={"operation": action, "score": final_conf},
+            success=True, confidence=final_conf,
+        )
         await self.logs_manager.info(f"Final confidence score for {action}: {final_conf:.2f}")
         return final_conf
 
@@ -119,12 +121,12 @@ class ConfidenceScorer:
         - if no data, fall back to self.base_confidence
         """
         await self.logs_manager.debug(f"Computing heuristic confidence for action: {action}")
-        
+
         # Example:
-        success_rate = self.learning_pipeline.get_success_rate(action, window=50)
+        success_rate = await self.learning_pipeline.get_success_rate(action, window=50)
         await self.logs_manager.debug(f"Historical success rate for {action}: {success_rate:.2f}")
-        
-        if success_rate == 0.0:
+
+        if not self.learning_pipeline.outcomes.get(action):
             # If no data found or zero success, fallback to a base confidence
             await self.logs_manager.info(f"No historical data for {action}, using base confidence: {self.base_confidence}")
             return self.base_confidence
@@ -152,7 +154,7 @@ class ConfidenceScorer:
         """
         await self.logs_manager.info(f"Computing GPT-based confidence for action: {action}")
         await self.logs_manager.debug(f"Input context: {context}, heuristic confidence: {heuristic_conf}")
-        
+
         try:
             # TODO: Implement real GPT calls here if you want advanced logic
             # This might involve constructing a prompt with relevant info:
@@ -171,15 +173,10 @@ class ConfidenceScorer:
             # )
             # raw_conf = ...  # parse from response
             # final_conf = ...
-            
-            # For now, we just return a random approach that slightly adjusts the heuristic_conf:
-            await self.logs_manager.warning("Using placeholder GPT confidence calculation (random adjustment)")
-            gpt_adjustment = random.uniform(-0.1, 0.1)  # placeholder
-            final_conf = max(0.0, min(1.0, heuristic_conf + gpt_adjustment))
-            
-            await self.logs_manager.debug(f"GPT adjustment: {gpt_adjustment:+.2f}, final confidence: {final_conf:.2f}")
-            return final_conf
-            
+
+            await self.logs_manager.warning("GPT confidence is unavailable; using historical confidence")
+            return heuristic_conf
+
         except Exception as e:
             error_msg = f"Error in GPT confidence calculation for {action}: {str(e)}"
             await self.logs_manager.error(error_msg)
@@ -188,17 +185,17 @@ class ConfidenceScorer:
     async def calculate_confidence(self, operation_type: str, context: dict = None):
         """
         Calculate confidence for an operation and track it in telemetry.
-        
+
         Args:
             operation_type (str): The type of operation being performed
             context (dict): Additional context about the operation
         """
         await self.logs_manager.info(f"Calculating confidence for operation: {operation_type}")
         await self.logs_manager.debug(f"Operation context: {context}")
-        
+
         try:
             score = await self._compute_score(operation_type, context)
-            
+
             # Track the confidence calculation in telemetry
             await self.telemetry.track_event(
                 event_type="confidence_calculation",
@@ -210,10 +207,10 @@ class ConfidenceScorer:
                 success=True,
                 confidence=score
             )
-            
+
             await self.logs_manager.info(f"Successfully calculated confidence for {operation_type}: {score:.2f}")
             return score
-            
+
         except Exception as e:
             error_msg = f"Error calculating confidence for {operation_type}: {str(e)}"
             await self.logs_manager.error(error_msg)
@@ -225,14 +222,14 @@ class ConfidenceScorer:
         Override this in subclasses for different scoring strategies.
         """
         await self.logs_manager.debug(f"Computing base score for operation: {operation_type}")
-        
+
         # Default implementation uses learning pipeline data if available
-        success_rate = self.learning_pipeline.get_success_rate(operation_type)
+        success_rate = await self.learning_pipeline.get_success_rate(operation_type)
         await self.logs_manager.debug(f"Retrieved success rate for {operation_type}: {success_rate}")
-        
-        if success_rate > 0:
+
+        if self.learning_pipeline.outcomes.get(operation_type):
             await self.logs_manager.debug(f"Using success rate as confidence: {success_rate}")
             return success_rate
-            
+
         await self.logs_manager.info(f"No success rate data for {operation_type}, using base confidence: {self.base_confidence}")
         return self.base_confidence

@@ -11,8 +11,8 @@ Features:
 
 Bypass Functionality:
 -------------------
-The TrackerAgent now includes comprehensive bypass mechanisms to selectively disable 
-tracking operations. This is useful for debugging, testing, or when certain tracking 
+The TrackerAgent now includes comprehensive bypass mechanisms to selectively disable
+tracking operations. This is useful for debugging, testing, or when certain tracking
 operations need to be temporarily disabled.
 
 Available Bypass Operations:
@@ -46,8 +46,8 @@ Usage Examples:
        await some_operation()
    ```
 
-Note: When all operations are bypassed, the log_activity method returns immediately 
-without performing any operations. This is the most efficient way to completely 
+Note: When all operations are bypassed, the log_activity method returns immediately
+without performing any operations. This is the most efficient way to completely
 disable tracking when needed.
 
 TODO (AI Integration):
@@ -65,7 +65,8 @@ import uuid
 import os
 from constants import TimingConstants, Messages
 import json
-import aiofiles
+from storage.file_utils import atomic_text_writer, file_lock
+from storage.privacy import redact_data, redact_text
 from utils.telemetry import TelemetryManager
 from storage.logs_manager import LogsManager
 
@@ -123,27 +124,24 @@ class TrackerAgent:
         """
         # Store logs_manager reference
         self.logs_manager = logs_manager
-        
+
         # Add bypass flags
         self._bypass_mode = False
         self._bypass_operations = {
-            'uuid_gen': True,      # Skip UUID generation
-            'timestamp': True,     # Skip timestamp formatting
-            'activity_dict': True, # Skip activity dictionary creation
-            'logging': True,       # Skip activity message logging
-            'history': True,       # Skip adding to internal history
-            'disk_write': True     # Skip writing to disk
+            'uuid_gen': False,      # Skip UUID generation
+            'timestamp': False,     # Skip timestamp formatting
+            'activity_dict': False, # Skip activity dictionary creation
+            'logging': False,       # Skip activity message logging
+            'history': False,       # Skip adding to internal history
+            'disk_write': False     # Skip writing to disk
         }
-        
-        # Log initialization start
-        if self.logs_manager and not self._bypass_mode:
-            asyncio.create_task(self.logs_manager.info("[TrackerAgent] Initializing tracker agent..."))
-        
+
+
         # Add logging control flag
         self._logging_enabled = True
-        
-        self.data_dir = Path(settings.get("data_dir", "./logs"))
-        self.data_dir.mkdir(exist_ok=True)
+
+        self.data_dir = Path(settings.get("data_dir", settings.get("system", {}).get("data_dir", "./data")))
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.activity_file = self.data_dir / "activity_log.csv"
 
         # Set a max file size for rotation
@@ -167,7 +165,7 @@ class TrackerAgent:
         self.default_timeout = TimingConstants.DEFAULT_TIMEOUT
 
         self.activity_history = []  # Store recent activities
-        self.storage_path = Path(settings.get('tracker_path', './data/tracker'))
+        self.storage_path = Path(settings.get('tracker_path', self.data_dir / 'tracker'))
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize telemetry manager
@@ -176,26 +174,19 @@ class TrackerAgent:
         self.state_history = []
         self.metrics = {}
 
-        # Log initialization complete
-        if self.logs_manager:
-            asyncio.create_task(self.logs_manager.info("[TrackerAgent] Initialization complete"))
 
     def disable_logging(self):
         """Temporarily disable activity logging."""
         self._logging_enabled = False
-        if self.logs_manager:
-            asyncio.create_task(self.logs_manager.debug("[TrackerAgent] Activity logging disabled"))
 
     def enable_logging(self):
         """Re-enable activity logging."""
         self._logging_enabled = True
-        if self.logs_manager:
-            asyncio.create_task(self.logs_manager.debug("[TrackerAgent] Activity logging enabled"))
 
     def enable_bypass(self, operations: list[str] = None):
         """
         Enable bypass mode for specified operations or all if none specified.
-        
+
         Args:
             operations: List of operations to bypass. Options:
                 - 'uuid_gen': Skip UUID generation
@@ -206,24 +197,17 @@ class TrackerAgent:
                 - 'disk_write': Skip writing to disk
                 If None, bypasses all operations.
         """
-        print("[DEBUG] TrackerAgent: Enabling bypass")
-        print(f"[DEBUG] - Current bypass_mode: {self._bypass_mode}")
-        print(f"[DEBUG] - Current operations: {self._bypass_operations}")
-        
+
         self._bypass_mode = True
         if operations:
             for op in operations:
                 if op in self._bypass_operations:
                     self._bypass_operations[op] = True
-                    print(f"[DEBUG] - Enabled bypass for: {op}")
         else:
             # Bypass all operations
             for op in self._bypass_operations:
                 self._bypass_operations[op] = True
-            print("[DEBUG] - Enabled bypass for all operations")
-        
-        print(f"[DEBUG] - New bypass_mode: {self._bypass_mode}")
-        print(f"[DEBUG] - New operations: {self._bypass_operations}")
+
 
     def disable_bypass(self, operations: list[str] = None):
         """Disable bypass mode for specified operations or all if none specified."""
@@ -250,71 +234,34 @@ class TrackerAgent:
         Log an activity with a timestamp, agent name, job_id, etc.
         Also logs the activity for real-time feedback.
         """
-        print(f"[DEBUG] TrackerAgent: log_activity called")
-        print(f"[DEBUG] - bypass_mode: {self._bypass_mode}")
-        print(f"[DEBUG] - operations: {self._bypass_operations}")
-        
-        # Quick return if everything is bypassed
-        if self._bypass_mode and all(self._bypass_operations.values()):
-            print("[DEBUG] TrackerAgent: All operations bypassed, skipping log_activity")
+
+        if not self._logging_enabled or (self._bypass_mode and all(self._bypass_operations.values())):
             return
-
-        print("[DEBUG] TrackerAgent: Processing activity with selective bypassing")
-        # Selective bypassing of operations
         activity = {}
-        
         if not self._bypass_operations['uuid_gen']:
-            print("[DEBUG] - Generating UUID")
-            activity["row_id"] = str(uuid.uuid4())
-            
+            activity['row_id'] = str(uuid.uuid4())
         if not self._bypass_operations['timestamp']:
-            print("[DEBUG] - Adding timestamp")
-            activity["timestamp"] = datetime.now().isoformat(sep=' ', timespec='seconds')
-            
+            activity['timestamp'] = datetime.now().isoformat()
         if not self._bypass_operations['activity_dict']:
-            print("[DEBUG] - Creating activity dictionary")
-            activity.update({
-                "agent_name": agent_name,
-                "job_id": job_id,
-                "type": activity_type,
-                "details": details,
-                "status": status
-            })
-
-        # Log for real-time feedback if not bypassed
-        if not self._bypass_operations['logging'] and self.logs_manager:
-            print("[DEBUG] - Logging activity message")
-            log_msg = f"{activity.get('timestamp', '')} | {agent_name} | {activity_type} | {details} | {status}"
-            await self.logs_manager.info(f"[TrackerAgent] Activity: {log_msg}")
-
-        # Add to history if not bypassed
-        if not self._bypass_operations['history']:
-            print("[DEBUG] - Adding to activity history")
-            self.activity_history.append(activity)
-
-        # Write to disk if not bypassed
-        if not self._bypass_operations['disk_write']:
-            print("[DEBUG] - Writing to disk")
-            df = pd.DataFrame([activity], columns=self.log_columns)
-            async with self._lock:
-                try:
+            activity.update(redact_data({'agent_name': agent_name, 'job_id': job_id,
+                                        'type': activity_type, 'details': details, 'status': status}))
+        async with self._lock:
+            with file_lock(self.storage_path / 'activity_history.json'):
+                if not self._bypass_operations['history']:
+                    if not self._bypass_operations['disk_write']:
+                        await self._load_activities()
+                    self.activity_history.append(activity)
+                if not self._bypass_operations['disk_write']:
                     await self._rotate_if_needed()
-                    file_exists = self.activity_file.exists()
-                    df.to_csv(
-                        self.activity_file,
-                        mode="a",
-                        header=not file_exists,
-                        index=False
+                    has_data = self.activity_file.exists() and self.activity_file.stat().st_size > 0
+                    pd.DataFrame([activity], columns=self.log_columns).to_csv(
+                        self.activity_file, mode='a', header=not has_data, index=False,
+                        encoding='utf-8',
                     )
-                    print("[DEBUG] - Successfully wrote to disk")
-                except Exception as e:
-                    print(f"[DEBUG] - Error writing to disk: {str(e)}")
-                    if self.logs_manager:
-                        await self.logs_manager.error(f"[TrackerAgent] Error writing to CSV: {e}")
-
-        print("[DEBUG] TrackerAgent: log_activity completed")
-
-        await self._save_activities()
+                    if not self._bypass_operations['history']:
+                        await self._save_activities()
+        if not self._bypass_operations['logging'] and self.logs_manager:
+            await self.logs_manager.info(f'[TrackerAgent] {activity_type}: {redact_text(details)} ({status})')
 
     async def get_activities(self, activity_type: str = None) -> pd.DataFrame:
         """
@@ -330,62 +277,29 @@ class TrackerAgent:
             if self.logs_manager:
                 filter_msg = f" filtered by type '{activity_type}'" if activity_type else ""
                 await self.logs_manager.info(f"[TrackerAgent] Retrieving activities{filter_msg}")
-            
+
             # Add delay before file read
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            
+
             df = pd.read_csv(self.activity_file)
             if activity_type:
                 df = df[df["type"] == activity_type]
-            
+
             # Add delay after file read
-            await asyncio.sleep(TimingConstants.TEXT_EXTRACTION_DELAY)
 
             if self.logs_manager:
                 await self.logs_manager.info(f"[TrackerAgent] Retrieved {len(df)} activities")
             return df
-            
+
         except Exception as e:
             error_msg = f"Error reading CSV: {e}"
             if self.logs_manager:
                 await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
-                await asyncio.sleep(TimingConstants.ERROR_DELAY)
             return pd.DataFrame(columns=self.log_columns)
 
     async def _rotate_if_needed(self):
-        """
-        Checks if the current log file exceeds max_file_size_bytes.
-        If so, rename it with a timestamp suffix and start a fresh one.
-        """
-        if not self.activity_file.exists():
-            return
-
-        file_size = self.activity_file.stat().st_size
-        if file_size >= self.max_file_size_bytes:
-            # Create a timestamped filename
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            rotated_name = self.data_dir / f"activity_log_{timestamp_str}.csv"
-
-            try:
-                # Add delay before file rotation
-                await asyncio.sleep(TimingConstants.ACTION_DELAY)
-                
-                if self.logs_manager:
-                    await self.logs_manager.info(f"[TrackerAgent] Rotating log file. Size: {file_size} bytes")
-                
-                self.activity_file.rename(rotated_name)
-                
-                if self.logs_manager:
-                    await self.logs_manager.info(f"[TrackerAgent] Log file rotated to: {rotated_name}")
-                
-                # Add delay after file rotation
-                await asyncio.sleep(TimingConstants.FILE_UPLOAD_DELAY)
-                
-            except Exception as e:
-                error_msg = f"Error rotating log file: {e}"
-                if self.logs_manager:
-                    await self.logs_manager.error(f"[TrackerAgent] {error_msg}")
-                await asyncio.sleep(TimingConstants.ERROR_DELAY)
+        if self.activity_file.exists() and self.activity_file.stat().st_size >= self.max_file_size_bytes:
+            suffix = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            self.activity_file.rename(self.data_dir / f'activity_log_{suffix}_{uuid.uuid4().hex[:8]}.csv')
 
     async def get_recent_activities(
         self,
@@ -400,65 +314,49 @@ class TrackerAgent:
                 f"{f' with type {activity_type}' if activity_type else ''}"
                 f"{f' and status {status}' if status else ''}"
             )
-        
+
         await self._load_activities()  # Load from disk before querying
-        cutoff_time = datetime.now() - timedelta(minutes=timeframe_minutes)
-        
+        cutoff_time = datetime.now().astimezone() - timedelta(minutes=timeframe_minutes)
+
         # Handle activity_type as string or list
         activity_types = (
             [activity_type] if isinstance(activity_type, str)
             else activity_type
         )
-        
-        filtered_activities = [
-            activity for activity in self.activity_history
-            if (
-                activity['timestamp'] >= cutoff_time and
-                (not activity_types or activity['type'] in activity_types) and
-                (not status or activity['status'] == status)
-            )
-        ]
+
+        filtered_activities = []
+        for activity in self.activity_history:
+            try:
+                timestamp = activity.get('timestamp')
+                if isinstance(timestamp, str):
+                    timestamp = datetime.fromisoformat(timestamp)
+                if (isinstance(timestamp, datetime) and timestamp.astimezone() >= cutoff_time
+                        and (not activity_types or activity.get('type') in activity_types)
+                        and (not status or activity.get('status') == status)):
+                    filtered_activities.append(activity.copy())
+            except (TypeError, ValueError):
+                continue
 
         if self.logs_manager:
             await self.logs_manager.info(
                 f"[TrackerAgent] Found {len(filtered_activities)} activities in the specified timeframe"
             )
-        
+
         return filtered_activities
 
     async def _load_activities(self):
-        """Load activities from disk."""
-        activities_file = self.storage_path / 'activity_history.json'
-        if activities_file.exists():
-            try:
-                if self.logs_manager:
-                    await self.logs_manager.debug("[TrackerAgent] Loading activities from disk")
-                
-                async with aiofiles.open(activities_file, 'r') as f:
-                    content = await f.read()
-                    self.activity_history = json.loads(content)
-                
-                if self.logs_manager:
-                    await self.logs_manager.info(f"[TrackerAgent] Loaded {len(self.activity_history)} activities from disk")
-            except Exception as e:
-                if self.logs_manager:
-                    await self.logs_manager.error(f"[TrackerAgent] Error loading activities: {e}")
-                
+        path = self.storage_path / 'activity_history.json'
+        if path.exists():
+            with file_lock(path), path.open(encoding='utf-8') as stream:
+                data = json.load(stream)
+            if not isinstance(data, list):
+                raise ValueError('Activity history must contain a list')
+            self.activity_history = data
+
     async def _save_activities(self):
-        """Save activities to disk."""
-        activities_file = self.storage_path / 'activity_history.json'
-        try:
-            if self.logs_manager:
-                await self.logs_manager.debug("[TrackerAgent] Saving activities to disk")
-            
-            async with aiofiles.open(activities_file, 'w') as f:
-                await f.write(json.dumps(self.activity_history))
-            
-            if self.logs_manager:
-                await self.logs_manager.info(f"[TrackerAgent] Saved {len(self.activity_history)} activities to disk")
-        except Exception as e:
-            if self.logs_manager:
-                await self.logs_manager.error(f"[TrackerAgent] Error saving activities: {e}")
+        path = self.storage_path / 'activity_history.json'
+        with file_lock(path), atomic_text_writer(path) as stream:
+            json.dump(redact_data(self.activity_history), stream)
 
     async def track_action(self, action_name: str, context: dict = None) -> None:
         """
@@ -467,27 +365,27 @@ class TrackerAgent:
         if self.logs_manager:
             await self.logs_manager.info(f"[TrackerAgent] Tracking action: {action_name}")
             if context:
-                await self.logs_manager.debug(f"[TrackerAgent] Action context: {json.dumps(context)}")
+                await self.logs_manager.debug(f"[TrackerAgent] Action context: {json.dumps(redact_data(context))}")
 
         timestamp = datetime.now().isoformat()
-        
+
         action_data = {
             "action": action_name,
             "timestamp": timestamp,
-            "context": context or {},
-            "state": self.current_state.copy()
+            "context": redact_data(context or {}),
+            "state": redact_data(self.current_state)
         }
-        
+
         # Update state history
         self.state_history.append(action_data)
-        
+
         # Update metrics
         self._update_metrics(action_name, context)
-        
+
         # Send telemetry
         success = context.get("success", True) if context else True
         confidence = context.get("confidence", None) if context else None
-        
+
         await self.telemetry.track_event(
             event_type=action_name,
             data={
@@ -503,7 +401,7 @@ class TrackerAgent:
             await self.logs_manager.info(f"[TrackerAgent] Successfully tracked action: {action_name}")
             if not success:
                 await self.logs_manager.warning(f"[TrackerAgent] Action {action_name} reported as unsuccessful")
-    
+
     def _update_metrics(self, action_name: str, context: dict = None) -> None:
         """Update metrics based on the action and context."""
         if action_name not in self.metrics:
@@ -514,32 +412,31 @@ class TrackerAgent:
                 "last_occurrence": None,
                 "avg_duration": 0
             }
-        
+
         metric = self.metrics[action_name]
         metric["count"] += 1
         metric["last_occurrence"] = datetime.now().isoformat()
-        
-        if context and "success" in context:
-            if context["success"]:
-                metric["success_count"] += 1
-            else:
-                metric["failure_count"] += 1
-        
+
+        if context is None or context.get("success", True):
+            metric["success_count"] += 1
+        else:
+            metric["failure_count"] += 1
+
         if context and "duration" in context:
             # Update running average
             prev_avg = metric["avg_duration"]
             metric["avg_duration"] = (prev_avg * (metric["count"] - 1) + context["duration"]) / metric["count"]
-    
+
     async def update_state(self, state_updates: dict) -> None:
         """
         Update the current state with new values.
         """
         if self.logs_manager:
             await self.logs_manager.info(f"[TrackerAgent] Updating state with {len(state_updates)} changes")
-            await self.logs_manager.debug(f"[TrackerAgent] State updates: {json.dumps(state_updates)}")
+            await self.logs_manager.debug(f"[TrackerAgent] State updates: {json.dumps(redact_data(state_updates))}")
 
         self.current_state.update(state_updates)
-        
+
         # Track state change
         await self.track_action("state_updated", {
             "updates": state_updates
@@ -547,7 +444,7 @@ class TrackerAgent:
 
         if self.logs_manager:
             await self.logs_manager.info("[TrackerAgent] State update completed successfully")
-    
+
     def get_state_snapshot(self) -> dict:
         """
         Get a snapshot of the current state and metrics.
@@ -557,7 +454,7 @@ class TrackerAgent:
             "metrics": self.metrics.copy(),
             "history_length": len(self.state_history)
         }
-    
+
     async def analyze_performance(self, time_window: int = None) -> dict:
         """
         Analyze performance metrics within the given time window (in seconds).
@@ -568,14 +465,14 @@ class TrackerAgent:
 
         now = datetime.now()
         metrics = {}
-        
+
         for action, data in self.metrics.items():
             if time_window:
                 # Filter metrics within time window
                 last_occurrence = datetime.fromisoformat(data["last_occurrence"])
                 if (now - last_occurrence).total_seconds() > time_window:
                     continue
-            
+
             success_rate = data["success_count"] / data["count"] if data["count"] > 0 else 0
             metrics[action] = {
                 "success_rate": success_rate,
@@ -590,10 +487,10 @@ class TrackerAgent:
                     f"count={data['count']}, "
                     f"avg_duration={data['avg_duration']:.2f}"
                 )
-        
+
         if self.logs_manager:
             await self.logs_manager.info(f"[TrackerAgent] Performance analysis completed for {len(metrics)} actions")
-        
+
         return metrics
 
     @property

@@ -35,16 +35,16 @@ class DOMElementNode:
     @classmethod
     async def from_dict(cls, data: Dict, logs_manager: Optional['LogsManager'] = None) -> 'DOMBaseNode':
         """Create a DOM node from a dictionary representation.
-        
+
         Args:
             data: Dictionary containing node data
             logs_manager: Optional LogsManager instance for logging
         """
         node_type = data.get('type')
-        
+
         if logs_manager:
             await logs_manager.debug(f"Creating DOM node of type: {node_type}")
-            
+
         if node_type == 'text':
             if logs_manager:
                 await logs_manager.debug(f"Creating text node with content length: {len(data.get('content', ''))}")
@@ -55,14 +55,14 @@ class DOMElementNode:
         elif node_type == 'element':
             if logs_manager:
                 await logs_manager.debug(f"Creating element node with tag: {data.get('tag', '')}")
-            
+
             children_data = data.get('children', [])
             children_nodes = []
-            
+
             for child_data in children_data:
                 child = await cls.from_dict(child_data, logs_manager)
                 children_nodes.append(child)
-            
+
             if logs_manager:
                 await logs_manager.debug(f"Created element with {len(children_nodes)} children")
 
@@ -83,14 +83,14 @@ class DOMElementNode:
     async def find_clickable_elements(self) -> List['DOMElementNode']:
         """Collect all clickable & visible child elements (including self)."""
         result = []
-        
+
         if self.logs_manager:
             await self.logs_manager.debug(f"Searching for clickable elements in {self.tag if hasattr(self, 'tag') else 'text node'}")
-        
+
         if isinstance(self, DOMElementNode):
             if self.is_clickable and self.is_visible:
                 if self.logs_manager:
-                    await self.logs_manager.debug(f"Found clickable element: {self.tag} with attributes {self.attributes}")
+                    await self.logs_manager.debug(f"Found clickable element: {self.tag}")
                 result.append(self)
 
             for child in self.children:
@@ -100,5 +100,5 @@ class DOMElementNode:
 
         if self.logs_manager:
             await self.logs_manager.debug(f"Found {len(result)} total clickable elements in subtree")
-            
+
         return result

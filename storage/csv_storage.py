@@ -16,6 +16,7 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Union, List, Dict
+from storage.file_utils import atomic_text_writer, file_lock, safe_child
 
 class CSVStorage:
     def __init__(self, settings):
@@ -23,8 +24,18 @@ class CSVStorage:
         Args:
             settings (dict): Must include 'data_dir' for CSV storage location.
         """
-        self.data_dir = Path(settings['data_dir'])
-        self.data_dir.mkdir(exist_ok=True)
+        self.data_dir = Path(settings.get('data_dir', settings.get('system', {}).get('data_dir', './data')))
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, base_filename, file_id=None, use_timestamp=False):
+        safe_child(self.data_dir, base_filename)
+        parts = [base_filename]
+        if file_id is not None:
+            safe_child(self.data_dir, file_id)
+            parts.append(file_id)
+        if use_timestamp:
+            parts.append(datetime.now().strftime('%Y%m%d_%H%M'))
+        return safe_child(self.data_dir, '_'.join(parts) + '.csv')
 
     def save_data(
         self,
@@ -36,14 +47,14 @@ class CSVStorage:
     ) -> None:
         """
         Save data to a CSV file in append-only mode by default.
-        
+
         Args:
             data: A pandas DataFrame or a list of dictionaries (rows).
             base_filename (str): The base name for the CSV file (e.g. "jobs", "tracker").
             append (bool): If True, we append rows. Otherwise overwrite the file.
             use_timestamp (bool): If True, we add a date/time suffix to the filename.
             file_id (str): If provided, appended to filename to differentiate runs (like "001").
-        
+
         Resulting filename pattern:
             <base_filename>_[file_id]_YYYYMMDD_HHMM.csv   (if use_timestamp=True)
             <base_filename>_[file_id].csv                (otherwise)
@@ -55,21 +66,23 @@ class CSVStorage:
         else:
             df = data  # we assume it's already a DataFrame
 
-        # Construct the final filename
-        filename_parts = [base_filename]
-        if file_id:
-            filename_parts.append(file_id)
-        if use_timestamp:
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
-            filename_parts.append(timestamp_str)
-
-        final_filename = "_".join(filename_parts) + ".csv"
-        file_path = self.data_dir / final_filename
-
-        mode = 'a' if append else 'w'
-        header = not (append and file_path.exists())
-
-        df.to_csv(file_path, mode=mode, header=header, index=False)
+        file_path = self._path(base_filename, file_id, use_timestamp)
+        if df.empty:
+            return
+        if df.columns.has_duplicates:
+            raise ValueError('CSV column names must be unique')
+        with file_lock(file_path):
+            has_data = file_path.exists() and file_path.stat().st_size > 0
+            if append and has_data:
+                columns = list(pd.read_csv(file_path, nrows=0).columns)
+                if set(columns) != set(df.columns):
+                    raise ValueError('Appended CSV data must match the existing columns')
+                # Incoming dictionaries need not have the same insertion order.
+                df = df.loc[:, columns]
+                df.to_csv(file_path, mode='a', header=False, index=False, encoding='utf-8')
+            else:
+                with atomic_text_writer(file_path, newline='') as stream:
+                    df.to_csv(stream, index=False)
 
     def load_data(
         self,
@@ -93,12 +106,12 @@ class CSVStorage:
             # MVP: skip this advanced logic, or raise NotImplementedError
             raise NotImplementedError("Loading timestamped files not implemented in MVP")
 
-        final_filename = "_".join(filename_parts) + ".csv"
-        file_path = self.data_dir / final_filename
+        file_path = self._path(base_filename, file_id)
 
-        if not file_path.exists():
-            return pd.DataFrame()
-        return pd.read_csv(file_path)
+        with file_lock(file_path):
+            if not file_path.exists() or file_path.stat().st_size == 0:
+                return pd.DataFrame()
+            return pd.read_csv(file_path)
 
     def validate_data(
         self,
@@ -129,10 +142,9 @@ class CSVStorage:
             try:
                 # parse with pydantic
                 schema_obj = schema(**row)
-                valid_rows.append(schema_obj.dict())
+                valid_rows.append(schema_obj.model_dump())
             except Exception as e:
-                row["_validation_error"] = str(e)
-                invalid_rows.append(row)
+                invalid_rows.append({**row, "_validation_error": str(e)})
 
         # If we have invalid rows, log them to a separate CSV for reference
         if invalid_rows:
@@ -159,13 +171,12 @@ class CSVStorage:
         if use_timestamp:
             # Not fully implemented
             raise NotImplementedError("Checking timestamped file existence not in MVP.")
-        
+
         filename_parts = [base_filename]
         if file_id:
             filename_parts.append(file_id)
 
-        final_filename = "_".join(filename_parts) + ".csv"
-        return (self.data_dir / final_filename).exists()
+        return self._path(base_filename, file_id).exists()
 
     # Commenting out backup/export for MVP unless you want them active
     """

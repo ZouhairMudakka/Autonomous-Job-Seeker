@@ -11,7 +11,7 @@ centralized orchestration and error handling.
 
 **New Master-Plan Integration (MVP)**
 -------------------------------------
-We add a minimal "AI Master-Plan" logic that outlines the major steps (e.g. "Login → 
+We add a minimal "AI Master-Plan" logic that outlines the major steps (e.g. "Login →
 Search → Apply"), while still relying on site-specific fallback (like LinkedInLocators).
 
 1) We generate a short plan (list of steps) for each flow.
@@ -59,7 +59,8 @@ Dependencies:
 
 import asyncio
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, TYPE_CHECKING
+from copy import deepcopy
+from typing import Optional, TYPE_CHECKING
 from playwright.async_api import Page
 import threading
 
@@ -74,15 +75,12 @@ from datetime import datetime, timedelta
 from agents.cv_parser_agent import CVParserAgent
 from storage.logs_manager import LogsManager
 from utils.dom.dom_service import DomService
-from utils.bypass import TemporaryBypass
 
 if TYPE_CHECKING:
-    from agents.general_agent import GeneralAgent
-    from agents.form_filler_agent import FormFillerAgent
-    from agents.user_profile_agent import UserProfileAgent
+    pass
 
 class Controller:
-    def __init__(self, settings: dict, page: Optional['Page'] = None):
+    def __init__(self, settings: dict, page: Optional['Page'] = None, logs_manager=None):
         """Initialize the controller with settings and optional page object."""
         try:
             print("[DEBUG] ========================================")
@@ -90,24 +88,33 @@ class Controller:
             print(f"[DEBUG] Current thread: {threading.current_thread().name}")
             print(f"[DEBUG] Is main thread: {threading.current_thread() is threading.main_thread()}")
             print("[DEBUG] ========================================")
-            
+
             self.settings = settings
             self.page = page
             self.pause_state = {}
+            self.max_retries = max(1, int(settings.get('max_retries', TimingConstants.MAX_RETRIES)))
+            self.retry_delay = settings.get('retry_delay', TimingConstants.BASE_RETRY_DELAY)
+            self.current_plan = []
+            self.current_step = 0
+            self.completed_steps = []
+            self._resume_event = asyncio.Event()
+            self._resume_event.set()
+            self._owns_logs_manager = logs_manager is None
+            self._session_active = False
             self.current_mode = None
             self.gui_instance = None  # Track GUI instance if in GUI mode
-            
+
             # Initialize components that don't need controller reference
             print("[DEBUG] Initializing independent components...")
-            self.logs_manager = LogsManager(settings)
+            self.logs_manager = logs_manager if logs_manager is not None else LogsManager(settings)
             self.telemetry = TelemetryManager(settings)
             print("[DEBUG] Independent components initialized")
-            
+
             # Initialize task manager with self reference
             print("[DEBUG] Initializing TaskManager...")
             self.task_manager = TaskManager(controller=self)
             print("[DEBUG] TaskManager initialized")
-            
+
             # Initialize agents that need controller reference
             print("[DEBUG] Initializing agents...")
             self.linkedin_agent = LinkedInAgent(
@@ -115,16 +122,16 @@ class Controller:
                 controller=self,
                 logs_manager=self.logs_manager
             )
-            self.credentials_agent = CredentialsAgent(settings=self.settings, logs_manager=self.logs_manager)
+            self.dom_service = DomService(page=self.page, telemetry=self.telemetry, settings=self.settings, logs_manager=self.logs_manager)
+            self.credentials_agent = CredentialsAgent(settings=self.settings, dom_service=self.dom_service, logs_manager=self.logs_manager)
             self.tracker_agent = TrackerAgent(settings=self.settings, logs_manager=self.logs_manager)
             self.cv_parser = CVParserAgent(settings=self.settings, logs_manager=self.logs_manager)
             self.ai_navigator = AINavigator(page=self.page, settings=self.settings, logs_manager=self.logs_manager)
-            self.dom_service = DomService(page=self.page, telemetry=self.telemetry, settings=self.settings, logs_manager=self.logs_manager)
             print("[DEBUG] Agents initialized")
-            
+
             print("[DEBUG] Controller initialization complete")
             print("[DEBUG] ========================================")
-            
+
         except Exception as e:
             print("[DEBUG] ========================================")
             print(f"[DEBUG] ERROR in Controller.__init__: {str(e)}")
@@ -138,7 +145,7 @@ class Controller:
         try:
             print("[DEBUG] ========================================")
             print("[DEBUG] Verifying GUI mode readiness:")
-            
+
             # Check TrackerAgent specifically first
             print("[DEBUG] Checking TrackerAgent status:")
             print(f"[DEBUG] - TrackerAgent exists: {hasattr(self, 'tracker_agent')}")
@@ -146,7 +153,7 @@ class Controller:
                 print(f"[DEBUG] - TrackerAgent initialized: {self.tracker_agent is not None}")
                 print(f"[DEBUG] - TrackerAgent has lock: {hasattr(self.tracker_agent, '_lock')}")
                 print(f"[DEBUG] - TrackerAgent data dir exists: {self.tracker_agent.data_dir.exists()}")
-            
+
             # Check essential components
             components_status = {
                 "logs_manager": bool(self.logs_manager),
@@ -155,32 +162,32 @@ class Controller:
                 "tracker_agent": bool(self.tracker_agent),
                 "settings": bool(self.settings)
             }
-            
+
             print("[DEBUG] Component status:")
             for component, status in components_status.items():
                 print(f"[DEBUG] - {component}: {'✓' if status else '✗'}")
-            
+
             # Verify event loop
             try:
                 current_loop = asyncio.get_event_loop()
-                print(f"[DEBUG] Event loop status:")
+                print("[DEBUG] Event loop status:")
                 print(f"[DEBUG] - Loop running: {current_loop.is_running()}")
                 print(f"[DEBUG] - Loop closed: {current_loop.is_closed()}")
             except Exception as e:
                 print(f"[DEBUG] - Event loop check failed: {str(e)}")
-            
+
             # Check thread safety
-            print(f"[DEBUG] Thread information:")
+            print("[DEBUG] Thread information:")
             print(f"[DEBUG] - Current thread: {threading.current_thread().name}")
             print(f"[DEBUG] - Is main thread: {threading.current_thread() is threading.main_thread()}")
             print(f"[DEBUG] - Active threads: {threading.active_count()}")
-            
+
             all_ready = all(components_status.values())
             print(f"[DEBUG] Overall readiness: {'Ready' if all_ready else 'Not Ready'}")
             print("[DEBUG] ========================================")
-            
+
             return all_ready
-            
+
         except Exception as e:
             print("[DEBUG] ========================================")
             print(f"[DEBUG] ERROR in verify_gui_mode_readiness: {str(e)}")
@@ -196,15 +203,15 @@ class Controller:
             print("[DEBUG] ========================================")
             print("[DEBUG] Preparing controller for GUI mode")
             print(f"[DEBUG] Current thread: {threading.current_thread().name}")
-            
+
             # Set mode
             self.current_mode = 'gui'
             print("[DEBUG] Mode set to: gui")
-            
+
             # Initialize or verify components
             if not await self.verify_gui_mode_readiness():
                 raise RuntimeError("Controller not ready for GUI mode")
-            
+
             # Verify TrackerAgent specifically
             try:
                 print("[DEBUG] Testing TrackerAgent operations...")
@@ -224,7 +231,7 @@ class Controller:
                 # Log but don't fail - TrackerAgent issues shouldn't block GUI
                 if self.logs_manager:
                     await self.logs_manager.warning(f"TrackerAgent test failed: {str(tracker_error)}")
-            
+
             # Log preparation
             await self.logs_manager.info("Controller prepared for GUI mode")
             try:
@@ -236,10 +243,10 @@ class Controller:
                 )
             except Exception as e:
                 print(f"[DEBUG] WARNING: Failed to log mode change: {str(e)}")
-            
+
             print("[DEBUG] GUI mode preparation complete")
             print("[DEBUG] ========================================")
-            
+
         except Exception as e:
             error_msg = f"Failed to prepare for GUI mode: {str(e)}"
             print("[DEBUG] ========================================")
@@ -247,7 +254,7 @@ class Controller:
             print(f"[DEBUG] Exception type: {type(e).__name__}")
             print(f"[DEBUG] Thread: {threading.current_thread().name}")
             print("[DEBUG] ========================================")
-            
+
             await self.logs_manager.error(error_msg)
             try:
                 await self.tracker_agent.log_activity(
@@ -258,7 +265,7 @@ class Controller:
                 )
             except Exception:
                 pass  # Ignore TrackerAgent errors during error handling
-            
+
             raise
 
     async def register_gui_instance(self, gui_instance):
@@ -266,15 +273,15 @@ class Controller:
         try:
             print("[DEBUG] ========================================")
             print("[DEBUG] Registering GUI instance")
-            
+
             self.gui_instance = gui_instance
             print("[DEBUG] GUI instance registered successfully")
-            
+
             # Log registration
             await self.logs_manager.info("GUI instance registered with controller")
-            
+
             print("[DEBUG] ========================================")
-            
+
         except Exception as e:
             error_msg = f"Failed to register GUI instance: {str(e)}"
             print(f"[DEBUG] ERROR: {error_msg}")
@@ -286,18 +293,18 @@ class Controller:
         try:
             print("[DEBUG] ========================================")
             print("[DEBUG] Cleaning up GUI mode resources")
-            
+
             if self.gui_instance:
                 print("[DEBUG] Clearing GUI instance reference")
                 self.gui_instance = None
-            
+
             self.current_mode = None
             print("[DEBUG] Mode cleared")
-            
+
             await self.logs_manager.info("GUI mode cleanup completed")
             print("[DEBUG] GUI mode cleanup complete")
             print("[DEBUG] ========================================")
-            
+
         except Exception as e:
             error_msg = f"Error during GUI mode cleanup: {str(e)}"
             print(f"[DEBUG] ERROR: {error_msg}")
@@ -305,260 +312,91 @@ class Controller:
             raise
 
     async def start_session(self):
-        """
-        Prepare or initialize the automation session.
-        Logs the session start.
-        (User is already logged into LinkedIn for MVP).
-        """
-        try:
-            print("[DEBUG] ========================================")
-            print("[DEBUG] Controller: Starting new automation session")
-            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
-            print(f"[DEBUG] Is main thread: {threading.current_thread() is threading.main_thread()}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.info("Starting new automation session...")
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            
-            # Verify initial state
-            print("[DEBUG] Verifying initial state:")
-            print(f"[DEBUG] - Settings loaded: {bool(self.settings)}")
-            print(f"[DEBUG] - Page available: {bool(self.page)}")
-            print(f"[DEBUG] - Logs manager: {bool(self.logs_manager)}")
-            print(f"[DEBUG] - Agents initialized: {bool(self.linkedin_agent and self.tracker_agent)}")
-            print("[DEBUG] ========================================")
-            
-            # Use TemporaryBypass to skip activity tracking for session start
-            async with TemporaryBypass(self.tracker_agent):
-                await self.logs_manager.info("Session started successfully")
-                print("[DEBUG] Session started successfully")
-                print("[DEBUG] ========================================")
-            
-        except Exception as e:
-            error_msg = f"Failed to start session: {str(e)}"
-            print("[DEBUG] ========================================")
-            print(f"[DEBUG] ERROR: {error_msg}")
-            print(f"[DEBUG] Exception type: {type(e).__name__}")
-            print(f"[DEBUG] Thread: {threading.current_thread().name}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.error(error_msg)
-            await asyncio.sleep(TimingConstants.ERROR_DELAY)
-            
-            # Also bypass error activity logging
-            async with TemporaryBypass(self.tracker_agent):
-                raise
+        """Initialize owned logging and record the start of a session."""
+        if self._session_active:
+            return
+        if self._owns_logs_manager:
+            await self.logs_manager.initialize()
+        await self.linkedin_agent.resume()
+        self._resume_event.set()
+        await self.logs_manager.info("Starting new automation session...")
+        await self.tracker_agent.log_activity(
+            activity_type='session', details='Session started', status='success',
+            agent_name='Controller',
+        )
+        self._session_active = True
 
     async def run_linkedin_flow(self, job_title: str, location: str):
-        """Example method to orchestrate searching & applying on LinkedIn."""
-        attempt = 0
-        await self.logs_manager.info(f"Starting LinkedIn flow for job: {job_title} in {location}")
-        
-        while attempt < self.max_retries:
-            try:
-                await asyncio.sleep(TimingConstants.ACTION_DELAY)
-                
-                # Use AI Master-Plan for the flow
-                plan_steps = ["check_login", "open_job_page", "fill_search", "apply"]
-                await self.logs_manager.info(f"Executing master plan with steps: {plan_steps}")
-                success = await self.run_master_plan(plan_steps)
-                
-                if success:
-                    await self.logs_manager.info("LinkedIn flow completed successfully")
-                    await self.tracker_agent.log_activity(
-                        activity_type='job_search_apply',
-                        details=Messages.SUCCESS_MESSAGE,
-                        status='success',
-                        agent_name='Controller'
-                    )
-                    break
-                else:
-                    # Fallback to traditional flow if master plan fails
-                    await self.logs_manager.warning("Master plan failed, falling back to traditional flow")
-                    task = await self.task_manager.create_task(
-                        self.linkedin_agent.search_jobs_and_apply(job_title, location)
-                    )
-                    result = await self.task_manager.run_task(task)
-                    break
-
-            except Exception as e:
-                attempt += 1
-                await self.logs_manager.error(f"LinkedIn flow attempt {attempt} failed: {str(e)}")
-                await asyncio.sleep(TimingConstants.ERROR_DELAY)
-                await self.tracker_agent.log_activity(
-                    activity_type='job_search_apply',
-                    details=Messages.RETRY_MESSAGE.format(
-                        attempt, self.max_retries, str(e)
-                    ),
-                    status='error',
-                    agent_name='Controller'
-                )
-                
-                if attempt >= self.max_retries:
-                    await self.logs_manager.error("Max retries reached for LinkedIn flow. Stopping.")
-                    await self.tracker_agent.log_activity(
-                        activity_type='job_search_apply',
-                        details='Max retries reached. Stopping flow.',
-                        status='failed',
-                        agent_name='Controller'
-                    )
-                    raise e
-                else:
-                    # Exponential backoff delay before next attempt
-                    retry_delay = TimingConstants.BASE_RETRY_DELAY * (TimingConstants.RETRY_BACKOFF_FACTOR ** attempt)
-                    await self.logs_manager.info(f"Retrying after {retry_delay}ms delay...")
-                    await asyncio.sleep(retry_delay / 1000)
+        """Run the complete site-specific search/apply flow once."""
+        if not job_title or not location:
+            raise ValueError("Job title and location are required")
+        self.settings.update(job_title=job_title, location=location)
+        self.settings.pop('job_url', None)
+        await self._resume_event.wait()
+        task = await self.task_manager.create_task(
+            self.linkedin_agent.search_jobs_and_apply(job_title, location),
+            timeout=self.settings.get('job_search_timeout_seconds'),
+        )
+        result = await self.task_manager.run_task(task)
+        if result is False:
+            raise RuntimeError("LinkedIn search/apply flow failed")
+        await self.tracker_agent.log_activity(
+            activity_type='job_search_apply', details='Search/apply flow finished',
+            status='success', agent_name='Controller',
+        )
+        return result
 
     async def end_session(self):
-        """
-        Clean up and end the session.
-        Note: Browser cleanup is now handled at a higher level.
-        """
+        """Cancel work before closing the resources owned by this controller."""
+        was_active = getattr(self, '_session_active', False)
+        self._session_active = False
         try:
-            print("[DEBUG] ========================================")
-            print("[DEBUG] Controller: Ending automation session")
-            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.info("Ending automation session...")
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            
-            # Save final state if needed
-            if hasattr(self, 'pause_state') and self.pause_state:
-                print("[DEBUG] Saving final session state...")
-                await self._save_session_state()
-            
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details='Session ended by user or completion of tasks',
-                status='success',
-                agent_name='Controller'
-            )
-            await self.logs_manager.info("Session ended successfully")
-            
-            print("[DEBUG] Session ended successfully")
-            print("[DEBUG] ========================================")
-            
-        except Exception as e:
-            error_msg = f"Error ending session: {str(e)}"
-            print("[DEBUG] ========================================")
-            print(f"[DEBUG] ERROR: {error_msg}")
-            print(f"[DEBUG] Exception type: {type(e).__name__}")
-            print(f"[DEBUG] Thread: {threading.current_thread().name}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.error(error_msg)
-            await asyncio.sleep(TimingConstants.ERROR_DELAY)
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details=f'Error ending session: {str(e)}',
-                status='error',
-                agent_name='Controller'
-            )
-            raise
+            await self.task_manager.stop_processing()
+            runners = []
+            for task in list(self.task_manager.tasks.values()):
+                if task.runner is asyncio.current_task():
+                    continue
+                if task.runner is not None:
+                    runners.append(task.runner)
+                await self.task_manager.cancel_task(task.task_id)
+            if runners:
+                await asyncio.gather(*runners, return_exceptions=True)
+            if was_active:
+                await self.tracker_agent.log_activity(
+                    activity_type='session', details='Session ended', status='success',
+                    agent_name='Controller',
+                )
+        finally:
+            if self._owns_logs_manager and (was_active or getattr(self.logs_manager, 'is_initialized', False)):
+                await self.logs_manager.shutdown()
 
     async def pause_session(self):
-        """
-        Pause the current tasks or flows. 
-        For MVP, we simply log it. 
-        """
-        try:
-            print("[DEBUG] ========================================")
-            print("[DEBUG] Controller: Pausing automation session")
-            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.info("Pausing automation session...")
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            
-            # Save current state
-            if not await self._save_session_state():
-                print("[DEBUG] WARNING: Failed to save session state during pause")
-            
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details=Messages.PAUSE_MESSAGE,
-                status='info',
-                agent_name='Controller'
-            )
-            await self.logs_manager.info("Session paused successfully")
-            
-            print("[DEBUG] Session paused successfully")
-            print("[DEBUG] ========================================")
-            
-        except Exception as e:
-            error_msg = f"Error pausing session: {str(e)}"
-            print("[DEBUG] ========================================")
-            print(f"[DEBUG] ERROR: {error_msg}")
-            print(f"[DEBUG] Exception type: {type(e).__name__}")
-            print(f"[DEBUG] Thread: {threading.current_thread().name}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.error(error_msg)
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details=f'Error pausing session: {str(e)}',
-                status='error',
-                agent_name='Controller'
-            )
-            raise
+        """Pause subsequent browser actions and capture current progress."""
+        self._resume_event.clear()
+        await self.linkedin_agent.pause()
+        await self._save_session_state()
+        await self.tracker_agent.log_activity(
+            activity_type='session', details=Messages.PAUSE_MESSAGE,
+            status='info', agent_name='Controller',
+        )
 
     async def resume_session(self):
-        """
-        Resume tasks from a paused state. 
-        For MVP, we log it, but real logic is needed to continue from partial steps.
-        """
-        try:
-            print("[DEBUG] ========================================")
-            print("[DEBUG] Controller: Resuming automation session")
-            print(f"[DEBUG] Current thread: {threading.current_thread().name}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.info("Resuming automation session...")
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            
-            # Restore previous state if available
-            if hasattr(self, 'pause_state') and self.pause_state:
-                print("[DEBUG] Attempting to restore previous session state...")
-                if not await self._restore_session_state():
-                    print("[DEBUG] WARNING: Failed to restore session state")
-            
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details=Messages.RESUME_MESSAGE,
-                status='info',
-                agent_name='Controller'
-            )
-            await self.logs_manager.info("Session resumed successfully")
-            
-            print("[DEBUG] Session resumed successfully")
-            print("[DEBUG] ========================================")
-            
-        except Exception as e:
-            error_msg = f"Error resuming session: {str(e)}"
-            print("[DEBUG] ========================================")
-            print(f"[DEBUG] ERROR: {error_msg}")
-            print(f"[DEBUG] Exception type: {type(e).__name__}")
-            print(f"[DEBUG] Thread: {threading.current_thread().name}")
-            print("[DEBUG] ========================================")
-            
-            await self.logs_manager.error(error_msg)
-            await self.tracker_agent.log_activity(
-                activity_type='session',
-                details=f'Error resuming session: {str(e)}',
-                status='error',
-                agent_name='Controller'
-            )
-            raise
+        """Release paused work; it continues at the next action."""
+        await self.linkedin_agent.resume()
+        self._resume_event.set()
+        await self.tracker_agent.log_activity(
+            activity_type='session', details=Messages.RESUME_MESSAGE,
+            status='info', agent_name='Controller',
+        )
 
     async def handle_job_application(self, job_url: str, cv_path: str | Path):
         """
         Handle complete job application process including CV processing and form submission.
-        
+
         Args:
             job_url: URL of the job posting
             cv_path: Path to the CV file
-            
+
         Returns:
             bool: True if application was successful, False otherwise
         """
@@ -566,7 +404,7 @@ class Controller:
             await self.logs_manager.info(f"Starting job application process for {job_url}")
             # Use cv_parser instead of doc_processor
             cv_path, cv_data = await self.cv_parser.prepare_cv(cv_path)
-            
+
             # Log CV processing
             await self.logs_manager.info(f"Successfully processed CV: {cv_path.name}")
             await self.tracker_agent.log_activity(
@@ -575,30 +413,31 @@ class Controller:
                 status='info',
                 agent_name='Controller'
             )
-            
+
             # Create a plan for application submission
             application_plan = [
                 "check_login",
                 "open_job_page",
+                "apply",
                 "handle_user_profile",
                 "fill_application_form",
                 "validate_form",
                 "submit_application",
                 "track_application"
             ]
-            
+
             await self.logs_manager.info(f"Created application plan with steps: {application_plan}")
-            
+
             # Set application context in settings
             self.settings.update({
                 'job_url': job_url,
                 'cv_path': cv_path,
                 'cv_data': cv_data
             })
-            
+
             # Execute the application plan
             success = await self.run_master_plan(application_plan)
-            
+
             # Log the final result
             status_msg = "submitted successfully" if success else "failed"
             await self.logs_manager.info(f"Job application {status_msg} for: {job_url}")
@@ -608,9 +447,9 @@ class Controller:
                 status='success' if success else 'error',
                 agent_name='Controller'
             )
-            
+
             return success
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Error in job application process: {str(e)}")
             await self.tracker_agent.log_activity(
@@ -622,85 +461,34 @@ class Controller:
             return False
 
     async def run_master_plan(self, plan_steps: list[str]) -> bool:
-        """
-        Execute the AI Master-Plan with proper error handling and retries.
-        
-        Args:
-            plan_steps: List of steps to execute
-            
-        Returns:
-            bool: True if plan executed successfully
+        """Execute a plan once; individual safe steps own their retries.
+
+        Replaying an entire plan after a late failure can submit applications twice.
         """
         try:
-            # 1. Validate and modify plan based on conditions
             modified_plan = await self._modify_plan_for_conditions(plan_steps)
-            
-            # 2. Log plan execution start
+            self.current_plan = list(modified_plan)
+            self.current_step = 0
+            self.completed_steps = []
+            success, confidence = await self.ai_navigator.execute_master_plan(
+                modified_plan, before_step=self._before_plan_step
+            )
+            self.current_step = self.ai_navigator.current_step
+            self.completed_steps = list(self.ai_navigator.completed_steps)
             await self.tracker_agent.log_activity(
                 activity_type='master_plan',
-                details=f'Starting plan execution: {modified_plan}',
-                status='info',
-                agent_name='Controller'
+                details=f'Plan {"completed" if success else "failed"} with confidence {confidence}',
+                status='success' if success else 'failed', agent_name='Controller',
             )
-            
-            # 3. Execute plan with AI Navigator
-            attempt = 0
-            last_error = None
-            
-            while attempt < self.max_retries:
-                try:
-                    success, confidence = await self.ai_navigator.execute_master_plan(modified_plan)
-                    
-                    if success:
-                        await self.tracker_agent.log_activity(
-                            activity_type='master_plan',
-                            details=f'Plan completed successfully with confidence {confidence}',
-                            status='success',
-                            agent_name='Controller'
-                        )
-                        return True
-                        
-                    # If not successful but no exception, try again with delay
-                    attempt += 1
-                    if attempt < self.max_retries:
-                        retry_delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
-                        await asyncio.sleep(retry_delay / 1000)  # Convert ms to seconds
-                        
-                except Exception as e:
-                    last_error = str(e)
-                    attempt += 1
-                    
-                    await self.tracker_agent.log_activity(
-                        activity_type='master_plan',
-                        details=f'Plan attempt {attempt} failed: {last_error}',
-                        status='error',
-                        agent_name='Controller'
-                    )
-                    
-                    if attempt < self.max_retries:
-                        retry_delay = self.retry_delay * (2 ** attempt)
-                        await asyncio.sleep(retry_delay / 1000)
-                        
-                        # Check if we need to modify plan after error
-                        modified_plan = await self._handle_rate_limiting(modified_plan)
-            
-            # If we're here, we've exhausted retries
-            await self.tracker_agent.log_activity(
-                activity_type='master_plan',
-                details=f'Plan failed after {attempt} attempts. Last error: {last_error}',
-                status='failed',
-                agent_name='Controller'
-            )
+            return success
+        except Exception as exc:
+            await self.logs_manager.error(f"Plan execution failed: {exc}")
             return False
-            
-        except Exception as e:
-            await self.tracker_agent.log_activity(
-                activity_type='master_plan',
-                details=f'Critical error in plan execution: {str(e)}',
-                status='error',
-                agent_name='Controller'
-            )
-            return False
+
+    async def _before_plan_step(self):
+        self.current_step = self.ai_navigator.current_step
+        self.completed_steps = list(self.ai_navigator.completed_steps)
+        await self._resume_event.wait()
 
     async def _modify_plan_for_conditions(self, plan_steps: list[str]) -> list[str]:
         """
@@ -710,23 +498,24 @@ class Controller:
         - Previous success rates
         - Time constraints
         - Session history
-        
+
         Args:
             plan_steps: Original list of steps
-            
+
         Returns:
             list[str]: Modified plan with additional steps or checks
         """
         try:
             await self.logs_manager.info("Starting plan modification based on conditions...")
-            modified_plan = plan_steps.copy()
-            
+            modified_plan = []
+
             # 1. Check site performance and add verification steps
-            for i, step in enumerate(plan_steps):
+            for step in plan_steps:
+                modified_plan.append(step)
                 if step in self.ai_navigator.critical_steps:
                     # Add verification after critical steps
-                    modified_plan.insert(i + 1, "verify_action")
-                    
+                    modified_plan.append("verify_action")
+
                     # Log modification
                     await self.logs_manager.debug(f"Added verification step after critical step: {step}")
                     await self.tracker_agent.log_activity(
@@ -735,28 +524,29 @@ class Controller:
                         status='info',
                         agent_name='Controller'
                     )
-            
+
             # 2. Check session history for problematic steps
             recent_failures = await self.tracker_agent.get_recent_activities(
                 timeframe_minutes=30,
                 status='error'
             )
-            
+
             problem_steps = set(
-                activity.get('step') 
-                for activity in recent_failures 
+                activity.get('step')
+                for activity in recent_failures
                 if activity.get('step')
             )
-            
+
             if problem_steps:
                 await self.logs_manager.warning(f"Found problematic steps in history: {problem_steps}")
-            
+
             # Add extra verification for problematic steps
-            for i, step in enumerate(modified_plan):
+            expanded_plan = []
+            for step in modified_plan:
+                expanded_plan.append(step)
                 if step in problem_steps:
-                    modified_plan.insert(i + 1, "double_verify_action")
-                    modified_plan.insert(i + 1, "extended_wait")
-                    
+                    expanded_plan.extend(["extended_wait", "double_verify_action"])
+
                     await self.logs_manager.info(f"Added extra verification for problematic step: {step}")
                     await self.tracker_agent.log_activity(
                         activity_type='plan_modification',
@@ -764,27 +554,29 @@ class Controller:
                         status='info',
                         agent_name='Controller'
                     )
-            
+
+            modified_plan = expanded_plan
+
             # 3. Time-based modifications
             if await self._is_high_activity_period():
                 await self.logs_manager.info("High activity period detected, modifying plan with rate limiting handlers")
                 modified_plan = await self._handle_rate_limiting(modified_plan)
-            
+
             # 4. User preference based modifications
             if self.settings.get('careful_mode', False):
                 await self.logs_manager.info("Careful mode enabled, adding extra verification steps")
                 # Add extra verification steps throughout
                 modified_plan = self._add_careful_mode_steps(modified_plan)
-            
+
             # 5. Add recovery steps if needed
             if self.settings.get('needs_recovery', False):
                 await self.logs_manager.warning("Recovery needed, adding recovery steps to plan")
                 modified_plan.insert(0, "recovery_check")
                 modified_plan.insert(1, "state_restoration")
-            
+
             await self.logs_manager.info(f"Plan modification completed. Final steps: {modified_plan}")
             return modified_plan
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Error modifying plan: {str(e)}")
             # On error, return original plan
@@ -793,10 +585,10 @@ class Controller:
     async def _handle_rate_limiting(self, plan_steps: list[str]) -> list[str]:
         """
         Add delays or modify plan when rate limiting is detected.
-        
+
         Args:
             plan_steps: Original list of steps
-            
+
         Returns:
             list[str]: Modified plan with rate limiting handling
         """
@@ -804,19 +596,19 @@ class Controller:
             await self.logs_manager.info("Adding rate limiting handlers to plan...")
             modified_plan = []
             base_delay = self.settings.get('rate_limit_delay', TimingConstants.BASE_RETRY_DELAY)
-            
+
             for step in plan_steps:
                 # Add the original step
                 modified_plan.append(step)
-                
+
                 # Add delay and verification after critical operations
                 if step in self.ai_navigator.critical_steps:
                     # Add rate limit delay step
                     modified_plan.append("rate_limit_delay")
-                    
+
                     # Add verification step
                     modified_plan.append("verify_action")
-                    
+
                     await self.logs_manager.debug(f"Added rate limit handling after critical step: {step}")
                     await self.tracker_agent.log_activity(
                         activity_type='rate_limit',
@@ -824,16 +616,16 @@ class Controller:
                         status='info',
                         agent_name='Controller'
                     )
-                    
+
                     # Increase delay for subsequent critical operations
-                    base_delay *= TimingConstants.RETRY_BACKOFF_FACTOR
-            
+                    base_delay = min(base_delay * TimingConstants.RETRY_BACKOFF_FACTOR, TimingConstants.MAX_WAIT_TIME)
+
             # Update settings with new delay
             self.settings['rate_limit_delay'] = base_delay
             await self.logs_manager.info(f"Rate limit delay updated to {base_delay}ms")
-            
+
             return modified_plan
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Error handling rate limiting: {str(e)}")
             # On error, return original plan
@@ -856,7 +648,7 @@ class Controller:
         2. Time of day (peak hours)
         3. Site response times
         4. Recent rate limiting or CAPTCHA encounters
-        
+
         Returns:
             bool: True if current period is considered high activity
         """
@@ -867,44 +659,44 @@ class Controller:
                 timeframe_minutes=30,
                 activity_type='application'
             )
-            
+
             activity_threshold = self.settings.get('activity_threshold', 10)
             if len(recent_activities) > activity_threshold:
                 await self.logs_manager.warning(f"High activity detected: Recent applications ({len(recent_activities)}) exceed threshold ({activity_threshold})")
                 return True
-            
+
             # 2. Check if we're in peak hours (e.g., 9 AM to 5 PM local time)
             current_hour = datetime.now().hour
             peak_hours = range(9, 17)  # 9 AM to 5 PM
             if current_hour in peak_hours:
                 await self.logs_manager.info("Current time is within peak hours (9 AM - 5 PM)")
                 return True
-            
+
             # 3. Check recent response times (if available)
             recent_response_times = await self.telemetry.get_recent_metrics(
                 metric_type='response_time',
                 timeframe_minutes=15
             )
-            
+
             if recent_response_times:
                 avg_response_time = sum(recent_response_times) / len(recent_response_times)
                 if avg_response_time > self.settings.get('slow_response_threshold', 2000):
                     await self.logs_manager.warning(f"High activity detected: Slow average response time ({avg_response_time:.2f}ms)")
                     return True
-            
+
             # 4. Check recent CAPTCHA or rate limit encounters
             recent_issues = await self.tracker_agent.get_recent_activities(
                 timeframe_minutes=30,
                 activity_type=['captcha', 'rate_limit']
             )
-            
+
             if len(recent_issues) > self.settings.get('issue_threshold', 2):
                 await self.logs_manager.warning(f"High activity detected: {len(recent_issues)} recent CAPTCHA/rate limiting issues")
                 return True
-            
+
             await self.logs_manager.debug("No high activity period detected")
             return False
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Error checking activity period: {str(e)}")
             return False
@@ -931,45 +723,33 @@ class Controller:
         """
         try:
             await self.logs_manager.info("Attempting to save session state...")
-            # Check if we need recovery before saving
-            recovery_success, _ = await self.ai_navigator.execute_master_plan(["recovery_check"])
-            if not recovery_success:
-                await self.logs_manager.error("Cannot save state: recovery needed")
-                await self.tracker_agent.log_activity(
-                    activity_type='session_state',
-                    details='Cannot save state: recovery needed',
-                    status='error',
-                    agent_name='Controller'
-                )
-                return False
-
             # Build state object
-            self.pause_state = {
+            candidate_state = {
                 # Add a version key so we can detect mismatches if we change the schema
                 'session_version': "1.0",
-                
+
                 'timestamp': datetime.now().isoformat(),
-                
+
                 # Plan execution state
                 'current_plan': getattr(self, 'current_plan', []),
                 'current_step': getattr(self, 'current_step', 0),
                 'completed_steps': getattr(self, 'completed_steps', []),
-                
+
                 # Job search context
                 'job_data': {
                     'title': self.settings.get('job_title'),
                     'location': self.settings.get('location'),
                     'url': self.settings.get('job_url'),
-                    'cv_path': str(self.settings.get('cv_path', '')),
+                    'cv_path': str(self.settings.get('cv_path') or ''),
                 },
-                
+
                 # Application progress
                 'application_state': {
                     'form_data': self.settings.get('form_data', {}),
                     'uploaded_files': self.settings.get('uploaded_files', []),
                     'validation_status': self.settings.get('validation_status', {})
                 },
-                
+
                 # Metrics and timing
                 'metrics': {
                     'start_time': self.settings.get('start_time'),
@@ -981,7 +761,7 @@ class Controller:
             await self.logs_manager.debug("Session state object built, validating...")
 
             # Verify the state we're about to save
-            is_valid, error_msg = await self._validate_session_state(self.pause_state)
+            is_valid, error_msg = await self._validate_session_state(candidate_state)
             if not is_valid:
                 await self.logs_manager.error(f"Cannot save invalid state: {error_msg}")
                 await self.tracker_agent.log_activity(
@@ -991,30 +771,20 @@ class Controller:
                     agent_name='Controller'
                 )
                 return False
-            
-            # Verify save with AI Navigator
-            verify_success, confidence = await self.ai_navigator.execute_master_plan(["verify_action"])
-            if not verify_success:
-                await self.logs_manager.error("State save verification failed")
-                await self.tracker_agent.log_activity(
-                    activity_type='session_state',
-                    details='State save verification failed',
-                    status='error',
-                    agent_name='Controller'
-                )
-                return False
-            
+
+            self.pause_state = deepcopy(candidate_state)
+
             # Log successful save
-            await self.logs_manager.info(f"Session state saved and verified successfully (confidence: {confidence:.2f})")
+            await self.logs_manager.info("Session state saved and validated successfully")
             await self.tracker_agent.log_activity(
                 activity_type='session_state',
-                details=f'Session state saved and verified successfully (confidence: {confidence:.2f})',
+                details='Session state saved and validated successfully',
                 status='success',
                 agent_name='Controller'
             )
-            
+
             return True
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Failed to save session state: {str(e)}")
             await self.tracker_agent.log_activity(
@@ -1037,13 +807,13 @@ class Controller:
           5. Existence of CV path if specified.
           6. Plan/step consistency.
           7. Data-type checks for lists/dicts in sub-fields.
-        
+
         Args:
             state (dict): The dictionary containing the saved session state.
 
         Returns:
-            (bool, str): (is_valid, error_message) 
-                         is_valid = True if state is usable, 
+            (bool, str): (is_valid, error_message)
+                         is_valid = True if state is usable,
                          error_message = '' or reason why invalid.
         """
         try:
@@ -1063,7 +833,9 @@ class Controller:
 
             # 3. Validate timestamp not older than 1 hour
             saved_time = datetime.fromisoformat(state['timestamp'])
-            time_diff = datetime.now() - saved_time
+            time_diff = datetime.now(saved_time.tzinfo) - saved_time
+            if time_diff < timedelta(0):
+                return False, 'State timestamp is in the future'
             if time_diff > timedelta(hours=1):
                 await self.logs_manager.error("State is too old (> 1 hour)")
                 return False, "State is too old (> 1 hour)"
@@ -1089,7 +861,7 @@ class Controller:
             if not isinstance(current_plan, list):
                 await self.logs_manager.error("current_plan must be a list")
                 return False, "current_plan must be a list"
-            if current_step > len(current_plan):
+            if not isinstance(current_step, int) or isinstance(current_step, bool) or not 0 <= current_step <= len(current_plan):
                 await self.logs_manager.error("Invalid step index for saved plan (current_step > plan length)")
                 return False, "Invalid step index for saved plan (current_step > plan length)"
 
@@ -1120,14 +892,14 @@ class Controller:
 
             await self.logs_manager.debug("Session state validation successful")
             return True, "State validation successful."
-        
+
         except Exception as e:
             await self.logs_manager.error(f"Validation error: {str(e)}")
             return False, f"Validation error: {str(e)}"
 
     async def _restore_session_state(self) -> bool:
         """
-        Restore session state from self.pause_state (if any), 
+        Restore session state from self.pause_state (if any),
         after validating the data.
 
         Steps:
@@ -1165,10 +937,27 @@ class Controller:
 
             await self.logs_manager.debug("State validation passed, restoring data...")
 
+            # Verify restoration with AI Navigator
+            success, confidence = await self.ai_navigator.execute_master_plan([
+                "recovery_check",
+                "state_restoration",
+                "verify_action"
+            ])
+
+            if not success:
+                await self.logs_manager.error("State restoration verification failed")
+                await self.tracker_agent.log_activity(
+                    activity_type='session_state',
+                    details='State restoration verification failed',
+                    status='warning',
+                    agent_name='Controller'
+                )
+                return False
+
             # If valid, restore data
-            self.current_plan = self.pause_state.get('current_plan', [])
+            self.current_plan = list(self.pause_state.get('current_plan', []))
             self.current_step = self.pause_state.get('current_step', 0)
-            self.completed_steps = self.pause_state.get('completed_steps', [])
+            self.completed_steps = list(self.pause_state.get('completed_steps', []))
 
             job_data = self.pause_state.get('job_data', {})
             self.settings.update({
@@ -1192,24 +981,7 @@ class Controller:
                 'success_rate': metrics.get('success_rate', 0.0)
             })
 
-            await self.logs_manager.info("Core state data restored, verifying...")
-
-            # Verify restoration with AI Navigator
-            success, confidence = await self.ai_navigator.execute_master_plan([
-                "recovery_check",
-                "state_restoration",
-                "verify_action"
-            ])
-
-            if not success:
-                await self.logs_manager.error("State restored but verification failed")
-                await self.tracker_agent.log_activity(
-                    activity_type='session_state',
-                    details='State restored but verification failed',
-                    status='warning',
-                    agent_name='Controller'
-                )
-                return False
+            await self.logs_manager.info("Core state data restored after verification")
 
             # Log success
             await self.logs_manager.info(f"Session state restored and verified successfully (confidence: {confidence:.2f})")
@@ -1234,37 +1006,29 @@ class Controller:
     async def handle_site_specific_behavior(self, site: str, action: str) -> tuple[bool, dict]:
         """
         Handle different site-specific behaviors and quirks.
-        
+
         Args:
             site: The site identifier (e.g., 'linkedin', 'indeed')
             action: The action being performed (e.g., 'login', 'apply')
-            
+
         Returns:
             tuple[bool, dict]: (success, context_data)
         """
         try:
             await self.logs_manager.info(f"Handling {action} action for {site}")
-            
+
             # Site-specific behavior mappings
             site_behaviors = {
                 'linkedin': {
                     'login': self._handle_linkedin_login,
-                    'apply': self._handle_linkedin_apply,
-                    'captcha': self._handle_linkedin_captcha,
-                    'rate_limit': self._handle_linkedin_rate_limit
+                    'rate_limit': self._handle_linkedin_rate_limit,
                 },
-                'indeed': {
-                    'login': self._handle_indeed_login,
-                    'apply': self._handle_indeed_apply,
-                    'captcha': self._handle_indeed_captcha
-                },
-                # Add more sites as needed
             }
-            
+
             # Get the appropriate handler
             site_handlers = site_behaviors.get(site, {})
             handler = site_handlers.get(action)
-            
+
             if not handler:
                 await self.logs_manager.warning(f"No handler found for {site}/{action}")
                 await self.tracker_agent.log_activity(
@@ -1274,11 +1038,11 @@ class Controller:
                     agent_name='Controller'
                 )
                 return False, {}
-                
+
             # Execute the handler and get result
             await self.logs_manager.info(f"Executing handler for {site}/{action}")
             success, context = await handler()
-            
+
             # Log the result
             status_msg = "succeeded" if success else "failed"
             await self.logs_manager.info(f"Handler for {site}/{action} {status_msg}")
@@ -1288,9 +1052,9 @@ class Controller:
                 status='success' if success else 'error',
                 agent_name='Controller'
             )
-            
+
             return success, context
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Error handling {site}/{action}: {str(e)}")
             await self.tracker_agent.log_activity(
@@ -1306,12 +1070,7 @@ class Controller:
         """Handle LinkedIn-specific login behavior."""
         try:
             await self.logs_manager.info("Handling LinkedIn login process")
-            # Check for LinkedIn-specific elements
-            await self.ai_navigator.wait_for_element('.linkedin-login-form')
-            # Handle potential two-factor auth
-            if await self.ai_navigator.check_element_present('.two-factor-auth'):
-                await self.logs_manager.info("Two-factor authentication detected, handling...")
-                await self.credentials_agent.handle_2fa('linkedin')
+            await self.ai_navigator._verify_login_status()
             await self.logs_manager.info("LinkedIn login handled successfully")
             return True, {'platform': 'linkedin', 'action': 'login'}
         except Exception as e:
@@ -1322,7 +1081,7 @@ class Controller:
         """Handle LinkedIn-specific rate limiting."""
         try:
             await self.logs_manager.warning("LinkedIn rate limit detected, implementing delay...")
-            await asyncio.sleep(TimingConstants.RATE_LIMIT_DELAY)
+            await asyncio.sleep(TimingConstants.RATE_LIMIT_DELAY / 1000)
             await self.logs_manager.info("Rate limit delay completed")
             return True, {'platform': 'linkedin', 'action': 'rate_limit'}
         except Exception as e:
@@ -1338,7 +1097,7 @@ class Controller:
         - Error frequencies
         - Resource usage
         - Rate limiting incidents
-        
+
         Returns:
             dict: Performance metrics and analysis
         """
@@ -1348,51 +1107,51 @@ class Controller:
             recent_activities = await self.tracker_agent.get_recent_activities(
                 timeframe_minutes=30
             )
-            
+
             # Calculate success rate
             total_actions = len(recent_activities)
             successful_actions = len([
-                a for a in recent_activities 
+                a for a in recent_activities
                 if a.get('status') == 'success'
             ])
             success_rate = successful_actions / total_actions if total_actions > 0 else 0
-            
+
             await self.logs_manager.info(f"Success rate: {success_rate:.2%} ({successful_actions}/{total_actions} actions)")
-            
+
             # Get response times
             response_times = await self.telemetry.get_recent_metrics(
                 metric_type='response_time',
                 timeframe_minutes=15
             )
             avg_response_time = (
-                sum(response_times) / len(response_times) 
+                sum(response_times) / len(response_times)
                 if response_times else 0
             )
-            
+
             await self.logs_manager.info(f"Average response time: {avg_response_time:.2f}ms")
-            
+
             # Analyze error patterns
             error_activities = [
-                a for a in recent_activities 
+                a for a in recent_activities
                 if a.get('status') == 'error'
             ]
             error_types = {}
             for activity in error_activities:
                 error_type = activity.get('details', '').split(':')[0]
                 error_types[error_type] = error_types.get(error_type, 0) + 1
-            
+
             if error_types:
                 await self.logs_manager.warning(f"Detected error patterns: {error_types}")
-            
+
             # Check rate limiting
             rate_limit_incidents = len([
-                a for a in recent_activities 
+                a for a in recent_activities
                 if 'rate_limit' in a.get('details', '').lower()
             ])
-            
+
             if rate_limit_incidents > 0:
                 await self.logs_manager.warning(f"Rate limiting incidents detected: {rate_limit_incidents}")
-            
+
             # Compile metrics
             performance_metrics = {
                 'timestamp': datetime.now().isoformat(),
@@ -1403,12 +1162,12 @@ class Controller:
                 'error_patterns': error_types,
                 'rate_limit_incidents': rate_limit_incidents,
                 'performance_score': self._calculate_performance_score(
-                    success_rate, 
+                    success_rate,
                     avg_response_time,
                     rate_limit_incidents
                 )
             }
-            
+
             # Log performance data
             await self.logs_manager.info(f"Performance monitoring completed. Score: {performance_metrics['performance_score']:.2f}")
             await self.tracker_agent.log_activity(
@@ -1417,9 +1176,9 @@ class Controller:
                 status='info',
                 agent_name='Controller'
             )
-            
+
             return performance_metrics
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Error monitoring performance: {str(e)}")
             await self.tracker_agent.log_activity(
@@ -1434,8 +1193,8 @@ class Controller:
             }
 
     def _calculate_performance_score(
-        self, 
-        success_rate: float, 
+        self,
+        success_rate: float,
         avg_response_time: float,
         rate_limit_incidents: int
     ) -> float:
@@ -1444,18 +1203,18 @@ class Controller:
         SUCCESS_WEIGHT = 0.5
         RESPONSE_WEIGHT = 0.3
         RATE_LIMIT_WEIGHT = 0.2
-        
+
         # Normalize response time (assuming 2000ms is poor, 200ms is good)
         response_score = max(0, min(1, (2000 - avg_response_time) / 1800))
-        
+
         # Normalize rate limit incidents (0 is good, 5+ is poor)
         rate_limit_score = max(0, min(1, (5 - rate_limit_incidents) / 5))
-        
+
         # Calculate weighted score
         score = (
             success_rate * SUCCESS_WEIGHT +
             response_score * RESPONSE_WEIGHT +
             rate_limit_score * RATE_LIMIT_WEIGHT
         )
-        
+
         return score

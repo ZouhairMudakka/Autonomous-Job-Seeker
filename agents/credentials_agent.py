@@ -111,13 +111,13 @@ class CredentialsAgent:
         self.captcha_handler = settings.get("captcha_handler", "manual")
         self.data_dir = settings.get("data_dir", "./data")
         self.two_captcha_key = os.getenv("TWO_CAPTCHA_API_KEY", "")
-        
+
         # Get LinkedIn-specific settings
         linkedin_settings = settings.get('linkedin', {})
         self.default_timeout = linkedin_settings.get('default_timeout', TimingConstants.DEFAULT_TIMEOUT)
-        self.min_delay = linkedin_settings.get('min_delay', TimingConstants.HUMAN_DELAY_MIN)
-        self.max_delay = linkedin_settings.get('max_delay', TimingConstants.HUMAN_DELAY_MAX)
-        
+        self.min_delay = linkedin_settings.get('min_delay', TimingConstants.HUMAN_DELAY_MIN / 1000)
+        self.max_delay = linkedin_settings.get('max_delay', TimingConstants.HUMAN_DELAY_MAX / 1000)
+
         # Check if we're using an existing browser session
         browser_settings = settings.get('browser', {})
         self.attach_mode = browser_settings.get('attach_existing', False)
@@ -150,10 +150,10 @@ class CredentialsAgent:
     async def handle_captcha(self, captcha_selector: str, success_selector: str = None) -> Optional[str]:
         """
         Main captcha handling logic with AI Navigator coordination.
-        
+
         Args:
             captcha_selector (str): Selector for the CAPTCHA element
-            success_selector (str, optional): Selector to verify CAPTCHA success. 
+            success_selector (str, optional): Selector to verify CAPTCHA success.
                                            If not provided, uses default from LinkedInLocators
         """
         if not self.dom_service:
@@ -168,9 +168,10 @@ class CredentialsAgent:
 
         try:
             # 1. Initial detection
-            await self.dom_service.wait_for_selector(captcha_selector, timeout=self.default_timeout)
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
-            
+            if await self.dom_service.wait_for_selector(captcha_selector, timeout=self.default_timeout) is None:
+                return None
+            await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
+
             # 2. Check if it's a rate-limit related CAPTCHA
             rate_limited = await self.dom_service.check_element_present(
                 '.rate-limit-message, .too-many-requests',
@@ -179,7 +180,7 @@ class CredentialsAgent:
             if rate_limited:
                 if self.logs_manager:
                     await self.logs_manager.warning("[CredentialsAgent] Rate limiting detected with CAPTCHA")
-                await asyncio.sleep(TimingConstants.RATE_LIMIT_DELAY)
+                await asyncio.sleep(TimingConstants.RATE_LIMIT_DELAY / 1000)
 
             # 3. Determine CAPTCHA type
             captcha_type = await self._detect_captcha_type()
@@ -191,7 +192,7 @@ class CredentialsAgent:
             if captcha_type == "recaptcha_v2":
                 site_key = await self.extract_site_key()
                 if site_key:
-                    solution = await self.handle_recaptcha_v2(site_key, await self.dom_service.page.url)
+                    solution = await self.handle_recaptcha_v2(site_key, self.dom_service.page.url)
             elif captcha_type == "image":
                 if self.captcha_handler == "2captcha" and self.two_captcha_key:
                     solution = await self._handle_captcha_2captcha(captcha_selector)
@@ -202,7 +203,7 @@ class CredentialsAgent:
 
             # 6. Verify solution success
             if solution:
-                await asyncio.sleep(TimingConstants.ACTION_DELAY)
+                await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
                 success = await self.verify_captcha_success(success_selector)
                 if not success:
                     if self.logs_manager:
@@ -219,7 +220,7 @@ class CredentialsAgent:
     async def _detect_captcha_type(self) -> str:
         """
         Detect the type of CAPTCHA present on the page.
-        
+
         Returns:
             str: 'image', 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', or 'unknown'
         """
@@ -265,7 +266,7 @@ class CredentialsAgent:
     async def verify_captcha_success(self, success_selector: str = None) -> bool:
         """
         Verify if CAPTCHA was successfully solved.
-        
+
         Args:
             success_selector (str, optional): Selector to verify CAPTCHA success.
                                            If not provided, uses default from LinkedInLocators
@@ -277,17 +278,20 @@ class CredentialsAgent:
 
         # Use provided success selector or default from locators
         success_selector = success_selector or self.success_selectors['captcha']
+        if isinstance(success_selector, (list, tuple)):
+            success_selector = ', '.join(success_selector)
         if self.logs_manager:
             await self.logs_manager.debug(f"[CredentialsAgent] Verifying captcha with selector: {success_selector}")
 
         try:
-            await self.dom_service.wait_for_selector(success_selector, timeout=self.default_timeout)
-            await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY)
-            
+            if await self.dom_service.wait_for_selector(success_selector, timeout=self.default_timeout) is None:
+                return False
+            await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY / 1000)
+
             if self.logs_manager:
                 await self.logs_manager.info("[CredentialsAgent] CAPTCHA verification successful")
             return True
-            
+
         except PlaywrightTimeoutError:
             if self.logs_manager:
                 await self.logs_manager.warning("[CredentialsAgent] CAPTCHA verification failed - success selector not found")
@@ -300,11 +304,11 @@ class CredentialsAgent:
 
         if self.logs_manager:
             await self.logs_manager.info("[CredentialsAgent] Attempting 2captcha solution...")
-        await asyncio.sleep(TimingConstants.ACTION_DELAY)
+        await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
 
         try:
             # Get the captcha element screenshot
-            await asyncio.sleep(TimingConstants.SCREENSHOT_DELAY)
+            await asyncio.sleep(TimingConstants.SCREENSHOT_DELAY / 1000)
             img_bytes = await self.dom_service.screenshot_element(captcha_selector)
             if not img_bytes:
                 if self.logs_manager:
@@ -314,8 +318,8 @@ class CredentialsAgent:
             solution_text = await self._upload_to_2captcha(img_bytes)
             if solution_text:
                 if self.logs_manager:
-                    await self.logs_manager.info(f"[CredentialsAgent] 2captcha solution: {solution_text}")
-                await asyncio.sleep(TimingConstants.ACTION_DELAY)
+                    await self.logs_manager.info("[CredentialsAgent] CAPTCHA solution received")
+                await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
                 return solution_text
             else:
                 if self.logs_manager:
@@ -336,20 +340,22 @@ class CredentialsAgent:
 
         if self.logs_manager:
             await self.logs_manager.info("[CredentialsAgent] Uploading captcha to 2captcha...")
-        await asyncio.sleep(TimingConstants.ACTION_DELAY)
+        await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
 
         try:
             img_b64 = base64.b64encode(image_data).decode("utf-8")
 
-            upload_resp = requests.post(
-                "http://2captcha.com/in.php",
+            response = await asyncio.to_thread(requests.post,
+                "https://2captcha.com/in.php",
                 data={
                     "key": self.two_captcha_key,
                     "method": "base64",
                     "body": img_b64,
                     "json": 1
-                }
-            ).json()
+                }, timeout=30
+            )
+            response.raise_for_status()
+            upload_resp = response.json()
 
             if upload_resp["status"] == 0:
                 if self.logs_manager:
@@ -360,26 +366,35 @@ class CredentialsAgent:
             if self.logs_manager:
                 await self.logs_manager.debug(f"[CredentialsAgent] 2captcha captcha_id: {captcha_id}")
 
-            max_attempts = int(TimingConstants.MAX_WAIT_TIME / (TimingConstants.POLL_INTERVAL * 1000))
-            for attempt in range(max_attempts):
-                await asyncio.sleep(TimingConstants.POLL_INTERVAL)
-                check_resp = requests.get(
-                    "http://2captcha.com/res.php",
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + TimingConstants.MAX_WAIT_TIME / 1000
+            poll_interval = max(5.0, TimingConstants.POLL_INTERVAL / 1000)
+            attempt = 0
+            while loop.time() < deadline:
+                await asyncio.sleep(min(poll_interval, max(0, deadline - loop.time())))
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                attempt += 1
+                response = await asyncio.to_thread(requests.get,
+                    "https://2captcha.com/res.php",
                     params={
                         "key": self.two_captcha_key,
                         "action": "get",
                         "id": captcha_id,
                         "json": 1
-                    }
-                ).json()
+                    }, timeout=min(30, remaining)
+                )
+                response.raise_for_status()
+                check_resp = response.json()
 
                 if check_resp["status"] == 1:
-                    await asyncio.sleep(TimingConstants.ACTION_DELAY)
+                    await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
                     return check_resp["request"]
 
                 if check_resp["request"] == "CAPCHA_NOT_READY":
                     if self.logs_manager:
-                        await self.logs_manager.debug(f"[CredentialsAgent] 2captcha still solving, attempt: {attempt + 1}")
+                        await self.logs_manager.debug(f"[CredentialsAgent] 2captcha still solving, attempt: {attempt}")
                     continue
 
                 if self.logs_manager:
@@ -387,12 +402,13 @@ class CredentialsAgent:
                 return None
 
             if self.logs_manager:
-                await self.logs_manager.error(f"[CredentialsAgent] 2captcha timed out after {max_attempts} attempts.")
+                await self.logs_manager.error(f"[CredentialsAgent] 2captcha timed out after {attempt} attempts.")
             return None
 
         except Exception as ex:
             if self.logs_manager:
-                await self.logs_manager.error(f"[CredentialsAgent] 2captcha exception: {ex}")
+                # Request errors can contain the URL, including the API key.
+                await self.logs_manager.error(f"[CredentialsAgent] 2captcha request failed: {type(ex).__name__}")
             return None
 
     async def _handle_captcha_manual(self, captcha_selector: str) -> Optional[str]:
@@ -402,7 +418,7 @@ class CredentialsAgent:
 
         if self.logs_manager:
             await self.logs_manager.info("[CredentialsAgent] Manual captcha solving selected.")
-        await asyncio.sleep(TimingConstants.ACTION_DELAY)
+        await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
 
         # Check if the captcha element exists
         element_exists = await self.dom_service.query_selector(captcha_selector)
@@ -415,23 +431,24 @@ class CredentialsAgent:
         unique_id = str(uuid.uuid4())
         captcha_path = Path(self.data_dir) / f"temp_captcha_{unique_id}.png"
 
-        await asyncio.sleep(TimingConstants.SCREENSHOT_DELAY)
+        await asyncio.sleep(TimingConstants.SCREENSHOT_DELAY / 1000)
         await self.dom_service.screenshot_element(captcha_selector, path=str(captcha_path))
-        
+
         if self.logs_manager:
             await self.logs_manager.info(f"\nCAPTCHA image saved to: {captcha_path}")
-        
-        # This print must remain as it's a user prompt
-        solution = input("Please enter CAPTCHA solution (or press Enter to skip): ").strip()
 
+        # This print must remain as it's a user prompt
         try:
-            captcha_path.unlink(missing_ok=True)
-        except OSError:
-            if self.logs_manager:
-                await self.logs_manager.warning(f"[CredentialsAgent] Could not delete temporary captcha file: {captcha_path}")
+            solution = (await asyncio.to_thread(input, "Please enter CAPTCHA solution (or press Enter to skip): ")).strip()
+        finally:
+            try:
+                captcha_path.unlink(missing_ok=True)
+            except OSError:
+                if self.logs_manager:
+                    await self.logs_manager.warning("[CredentialsAgent] Could not delete temporary captcha file")
 
         if solution:
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
+            await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
             return solution
         return None
 
@@ -444,14 +461,14 @@ class CredentialsAgent:
             if self.logs_manager:
                 await self.logs_manager.info(f"[CredentialsAgent] Using existing {platform_name} session")
             return
-            
+
         if self.logs_manager:
             await self.logs_manager.info(f"[CredentialsAgent] (Future) login flow for {platform_name} not implemented.")
 
     async def verify_login_status(self, success_selector: str = None) -> bool:
         """
         Verify if login was successful.
-        
+
         Args:
             success_selector (str, optional): Selector to verify login success.
                                            If not provided, uses default from LinkedInLocators
@@ -463,17 +480,20 @@ class CredentialsAgent:
 
         # Use provided success selector or default from locators
         success_selector = success_selector or self.success_selectors['login']
+        if isinstance(success_selector, (list, tuple)):
+            success_selector = ', '.join(success_selector)
         if self.logs_manager:
             await self.logs_manager.debug(f"[CredentialsAgent] Verifying login with selector: {success_selector}")
 
         try:
-            await self.dom_service.wait_for_selector(success_selector, timeout=self.default_timeout)
-            await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY)
-            
+            if await self.dom_service.wait_for_selector(success_selector, timeout=self.default_timeout) is None:
+                return False
+            await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY / 1000)
+
             if self.logs_manager:
                 await self.logs_manager.info("[CredentialsAgent] Login verification successful")
             return True
-            
+
         except PlaywrightTimeoutError:
             if self.logs_manager:
                 await self.logs_manager.warning("[CredentialsAgent] Login verification failed - success selector not found")
@@ -482,7 +502,7 @@ class CredentialsAgent:
     async def verify_form_submission(self, success_selector: str = None) -> bool:
         """
         Verify if a form submission was successful.
-        
+
         Args:
             success_selector (str, optional): Selector to verify form submission success.
                                            If not provided, uses default from LinkedInLocators
@@ -494,17 +514,20 @@ class CredentialsAgent:
 
         # Use provided success selector or default from locators
         success_selector = success_selector or self.success_selectors['form']
+        if isinstance(success_selector, (list, tuple)):
+            success_selector = ', '.join(success_selector)
         if self.logs_manager:
             await self.logs_manager.debug(f"[CredentialsAgent] Verifying form submission with selector: {success_selector}")
 
         try:
-            await self.dom_service.wait_for_selector(success_selector, timeout=self.default_timeout)
-            await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY)
-            
+            if await self.dom_service.wait_for_selector(success_selector, timeout=self.default_timeout) is None:
+                return False
+            await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY / 1000)
+
             if self.logs_manager:
                 await self.logs_manager.info("[CredentialsAgent] Form submission verification successful")
             return True
-            
+
         except PlaywrightTimeoutError:
             if self.logs_manager:
                 await self.logs_manager.warning("[CredentialsAgent] Form submission verification failed - success selector not found")

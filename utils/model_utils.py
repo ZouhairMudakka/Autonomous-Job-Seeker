@@ -3,13 +3,13 @@ Model Utility Functions (Async + Moderate Strictness + MVP)
 
 Q2: Business/User Perspective on Pydantic Strictness
 -----------------------------------------------------
-From a user perspective, "strict" modes or custom JSON encoders in Pydantic 
-help ensure data is in exactly the format we expect (reducing errors in production). 
-If data is strictly validated, users or other agents might see more validation 
-errors if they pass incorrect data. If 'coerce_types' is used, we're more lenient 
-(e.g., turning "123" into 123). For an MVP, a moderate approach is typically 
-sufficient: raise errors on obviously invalid fields, but allow slight flexibility 
-for minor mismatches. Long-term, a stricter setup can reduce unexpected data 
+From a user perspective, "strict" modes or custom JSON encoders in Pydantic
+help ensure data is in exactly the format we expect (reducing errors in production).
+If data is strictly validated, users or other agents might see more validation
+errors if they pass incorrect data. If 'coerce_types' is used, we're more lenient
+(e.g., turning "123" into 123). For an MVP, a moderate approach is typically
+sufficient: raise errors on obviously invalid fields, but allow slight flexibility
+for minor mismatches. Long-term, a stricter setup can reduce unexpected data
 issues in production.
 
 Note on Future Splitting
@@ -20,7 +20,7 @@ We have created the following placeholder utility files for post-MVP usage:
 - application_utils.py (Will host ApplicationUtils methods)
 - data_export_utils.py (Will host DataExportUtils methods)
 
-Currently, all utility classes remain here in model_utils.py for the MVP. 
+Currently, all utility classes remain here in model_utils.py for the MVP.
 When the codebase grows, we will move each class to its respective file.
 """
 
@@ -32,15 +32,15 @@ from typing import Dict, List, Type, TypeVar, Optional, Any
 from storage.logs_manager import LogsManager
 
 # Pydantic v2 usage with moderate strictness:
-# We won't forcibly coerce totally incorrect types, 
+# We won't forcibly coerce totally incorrect types,
 # but we allow small flexibility for typical field usage.
-# For instance, we might set each model's config to strict mode 
+# For instance, we might set each model's config to strict mode
 # or just rely on defaults. This code simply notes we adopt a moderate stance.
 
 from models.cv_models import CVData, Education, Experience, Skill
 from models.user_models import UserProfile, JobPreference
 from models.job_models import JobPosting, CompanyInfo
-from models.application_models import ApplicationTracking, Interview
+from models.application_models import ApplicationTracking, ApplicationStatus
 
 ModelType = TypeVar('ModelType', CVData, UserProfile, JobPosting, ApplicationTracking)
 
@@ -98,7 +98,7 @@ class ModelUtils:
 
 class CVUtils:
     """
-    CV/Resume-related utilities. 
+    CV/Resume-related utilities.
     (Will move to cv_utils.py post-MVP)
     """
     def __init__(self, logs_manager: LogsManager):
@@ -117,7 +117,10 @@ class CVUtils:
             return []
 
         await logs_manager.info(f"Merging {len(experiences)} experiences")
-        sorted_exp = sorted(experiences, key=lambda x: (x.company, x.start_date))
+        sorted_exp = sorted(
+            (experience.model_copy(deep=True) for experience in experiences),
+            key=lambda x: (x.company, x.title, x.start_date),
+        )
         merged = []
         current = sorted_exp[0]
 
@@ -132,8 +135,12 @@ class CVUtils:
                 else:
                     current.end_date = None
 
-                current.description.extend(next_exp.description)
-                current.technologies.extend(next_exp.technologies)
+                descriptions = list(dict.fromkeys(
+                    text for text in (current.description, next_exp.description) if text
+                ))
+                current.description = '\n'.join(descriptions) or None
+                current.technologies = list(dict.fromkeys(current.technologies + next_exp.technologies))
+                current.is_current = current.is_current or next_exp.is_current
             else:
                 merged.append(current)
                 current = next_exp
@@ -148,11 +155,22 @@ class CVUtils:
         Calculate total years of experience (async).
         """
         await logs_manager.debug("Calculating total years of experience")
-        total_days = 0
+        intervals = []
         for exp in experiences:
             start = exp.start_date
             end = exp.end_date if exp.end_date else date.today()
-            total_days += (end - start).days
+            if end < start:
+                raise ValueError('Experience end_date must not precede start_date')
+            intervals.append((start, end))
+
+        # Concurrent jobs contribute elapsed experience once.
+        merged = []
+        for start, end in sorted(intervals):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        total_days = sum((end - start).days for start, end in merged)
 
         years = round(total_days / 365.25, 1)
         await logs_manager.info(f"Total experience calculated: {years} years")
@@ -217,24 +235,25 @@ class ApplicationUtils:
         Determine if application needs follow-up (async).
         Future expansions: incorporate user's preference or typical response times.
         """
-        await logs_manager.debug(f"Checking follow-up status for application {application.id}")
-        
-        if not application.last_contact_date:
+        await logs_manager.debug(f"Checking follow-up status for application {application.application_id}")
+
+        last_contact_date = getattr(application, 'last_contact_date', None) or application.applied_at
+        if application.status != ApplicationStatus.APPLIED or last_contact_date is None:
             await logs_manager.debug("No last contact date found, no follow-up needed")
             return False
 
-        days_since_contact = (datetime.now() - application.last_contact_date).days
+        days_since_contact = (datetime.now(last_contact_date.tzinfo) - last_contact_date).days
         follow_up_threshold = 7  # MVP default
-        
-        if hasattr(application, 'follow_up_count') and application.follow_up_count < 3:
+
+        if getattr(application, 'follow_up_count', 0) < 3:
             should_follow = days_since_contact >= follow_up_threshold
             await logs_manager.info(
-                f"Application {application.id}: {days_since_contact} days since last contact, "
+                f"Application {application.application_id}: {days_since_contact} days since last contact, "
                 f"follow-up {'needed' if should_follow else 'not needed yet'}"
             )
             return should_follow
-            
-        await logs_manager.debug(f"Application {application.id} has reached maximum follow-ups")
+
+        await logs_manager.debug(f"Application {application.application_id} has reached maximum follow-ups")
         return False
 
     @staticmethod
@@ -253,13 +272,13 @@ class ApplicationUtils:
                 'average_response_time': 0.0
             }
 
-        responses = sum(1 for app in applications if app.time_to_response is not None)
+        response_times = [getattr(app, 'time_to_response', None) for app in applications]
+        response_times = [value for value in response_times if value is not None]
+        responses = len(response_times)
         interviews = sum(1 for app in applications if getattr(app, 'interviews', None))
         avg_response_time = 0.0
         if responses:
-            sum_responses = sum((app.time_to_response or 0) for app in applications 
-                                if app.time_to_response is not None)
-            avg_response_time = sum_responses / responses
+            avg_response_time = sum(response_times) / responses
 
         metrics = {
             'total': total,
@@ -267,7 +286,7 @@ class ApplicationUtils:
             'interview_rate': round((interviews / total) * 100, 1),
             'average_response_time': round(avg_response_time, 1)
         }
-        
+
         await logs_manager.info(
             f"Metrics calculated - Total: {metrics['total']}, "
             f"Response Rate: {metrics['response_rate']}%, "

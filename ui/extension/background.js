@@ -1,146 +1,141 @@
-/**
- * Background Script (Native Messaging Version)
- * 
- * This script runs in the background and manages the state of the automation,
- * coordinating between the popup UI, content scripts, and the Python application
- * via Chrome native messaging.
- * 
- * Key Points:
- * - Instead of reading/writing status.json in the extension folder,
- *   we use native messaging to send commands and receive status updates.
- * - We store the latest status in chrome.storage.local so the popup or content
- *   scripts can retrieve it quickly.
+/** Native messaging prototype. Commands require a status-confirmed connection.
+ * Packaging still requires an extension manifest and an installed native host.
  */
-
-// In-memory state
-let isRunning = false;
-let isPaused = false;
-
-// We store the Native Messaging port globally
 let port = null;
+let reconnectTimer = null;
+let hostReady = false;
+let suspended = false;
+let latestStatus = disconnectedStatus();
 
-// Connect to the native messaging host
+function disconnectedStatus() {
+    return {
+        connected: false,
+        is_running: false,
+        is_paused: false,
+        status: 'Not connected; automation state unknown',
+        runtime: '--:--:--'
+    };
+}
+
+// A popup or content script may not be listening. Read lastError to consume it.
+function ignoreMissingReceiver() {
+    void chrome.runtime.lastError;
+}
+
+function isLinkedInUrl(value) {
+    try {
+        const url = new URL(value);
+        return url.protocol === 'https:' &&
+            (url.hostname === 'linkedin.com' || url.hostname.endsWith('.linkedin.com'));
+    } catch (_) {
+        return false;
+    }
+}
+
+function publishStatus(status) {
+    latestStatus = status;
+    chrome.storage.local.set({ automationStatus: status }, ignoreMissingReceiver);
+    chrome.runtime.sendMessage({ action: 'statusUpdate', status }, ignoreMissingReceiver);
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0] && isLinkedInUrl(tabs[0].url)) {
+            chrome.tabs.sendMessage(tabs[0].id, { action: 'statusUpdate', status }, ignoreMissingReceiver);
+        }
+    });
+}
+
+function scheduleReconnect() {
+    if (!suspended && reconnectTimer === null) {
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connectToHost();
+        }, 5000);
+    }
+}
+
 function connectToHost() {
-    // The host name here must match what you specified in your host manifest
-    // e.g. "com.linkedin.automation"
-    port = chrome.runtime.connectNative('com.linkedin.automation');
-
-    port.onMessage.addListener((message) => {
-        // Expecting a JSON object like: { type: 'statusUpdate', status: {...} }
-        if (message.type === 'statusUpdate') {
-            handleStatusUpdate(message.status);
-        } else {
-            console.log('Unknown message type:', message.type, message);
-        }
-    });
-
-    port.onDisconnect.addListener(() => {
-        console.log('Disconnected from native host. Retrying in 5 seconds...');
+    if (port || suspended) return;
+    if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    try {
+        const connection = chrome.runtime.connectNative('com.linkedin.automation');
+        port = connection;
+        connection.onMessage.addListener((message) => {
+            if (port !== connection || !message || message.type !== 'statusUpdate') return;
+            const status = message.status;
+            if (!status || typeof status.is_running !== 'boolean' || typeof status.is_paused !== 'boolean') return;
+            hostReady = true;
+            publishStatus({ ...status, connected: true });
+        });
+        connection.onDisconnect.addListener(() => {
+            const error = chrome.runtime.lastError;
+            if (error) console.warn('Native messaging host disconnected:', error.message);
+            if (port !== connection) return;
+            port = null;
+            hostReady = false;
+            publishStatus(disconnectedStatus());
+            scheduleReconnect();
+        });
+    } catch (error) {
         port = null;
-        setTimeout(connectToHost, 5000);
-    });
+        hostReady = false;
+        publishStatus(disconnectedStatus());
+        scheduleReconnect();
+    }
 }
 
-// Handle status updates from Python
-function handleStatusUpdate(status) {
-    // Update internal state
-    isRunning = status.is_running;
-    isPaused = status.is_paused;
-
-    // Store status in chrome.storage
-    chrome.storage.local.set({ automationStatus: status }, function() {
-        if (chrome.runtime.lastError) {
-            console.error('Error saving status:', chrome.runtime.lastError);
-        }
-    });
-
-    // Broadcast status to popup or content scripts
-    chrome.runtime.sendMessage({
-        action: 'statusUpdate',
-        status: status
-    });
-
-    // Optionally, to notify content scripts of active tab:
-    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-        if (tabs && tabs[0]) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-                action: 'statusUpdate',
-                status: status
-            });
-        }
-    });
-}
-
-// Send a command to Python (start/stop/pause, etc.)
 function sendCommand(command) {
-    if (port) {
-        // We assume a JSON structure like { type: 'command', command: 'start' }
-        port.postMessage({
-            type: 'command',
-            command: command
-        });
-    } else {
-        console.error('Not connected to native host. Attempting reconnect...');
+    if (!port || !hostReady) {
         connectToHost();
+        return { error: 'Native host is not ready. Retry after it connects.' };
+    }
+    try {
+        port.postMessage({ type: 'command', command });
+        // Sent is not completed: only host status updates change the UI state.
+        return { status: 'command_sent' };
+    } catch (error) {
+        const connection = port;
+        port = null;
+        hostReady = false;
+        try { connection.disconnect(); } catch (_) { /* Already disconnected. */ }
+        publishStatus(disconnectedStatus());
+        scheduleReconnect();
+        return { error: 'Command could not be sent to the native host.' };
     }
 }
 
-// Listen for messages from popup/content
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    switch(request.action) {
-        case 'start':
-            sendCommand('start');
-            sendResponse({status: 'command_sent'});
-            break;
-
-        case 'stop':
-            sendCommand('stop');
-            sendResponse({status: 'command_sent'});
-            break;
-
-        case 'pause':
-            sendCommand('pause');
-            sendResponse({status: 'command_sent'});
-            break;
-
-        case 'getStatus':
-            // Return the latest status from storage
-            chrome.storage.local.get(['automationStatus'], function(result) {
-                sendResponse({
-                    status: result.automationStatus || {
-                        is_running: false,
-                        is_paused: false,
-                        status: 'Not connected',
-                        runtime: '00:00:00'
-                    }
-                });
-            });
-            return true; // Keep channel open for async response
-
-        default:
-            sendResponse({error: 'Unknown action'});
+    if (!request || typeof request.action !== 'string') return false;
+    if (['start', 'stop', 'pause'].includes(request.action)) {
+        sendResponse(sendCommand(request.action));
+    } else if (request.action === 'getStatus') {
+        sendResponse({ status: latestStatus });
+    } else {
+        return false;
     }
-    return true;
+    return false;
 });
 
-// Attempt to connect when extension is installed or loaded
-chrome.runtime.onInstalled.addListener(() => {
-    connectToHost();
-});
-
-// If extension is reloaded or suspended, we might want to reconnect or cleanup
+chrome.runtime.onInstalled.addListener(connectToHost);
+chrome.runtime.onStartup.addListener(connectToHost);
 chrome.runtime.onSuspend.addListener(() => {
-    if (port) {
-        port.disconnect();
+    suspended = true;
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    const connection = port;
+    port = null;
+    hostReady = false;
+    if (connection) connection.disconnect();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && hostReady &&
+        latestStatus.is_running && !latestStatus.is_paused && isLinkedInUrl(tab.url)) {
+        chrome.tabs.sendMessage(tabId, { action: 'pageUpdated', url: tab.url }, ignoreMissingReceiver);
     }
 });
 
-// If you want to track tabs
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && isRunning) {
-        chrome.tabs.sendMessage(tabId, {
-            action: 'pageUpdated',
-            url: tab.url
-        });
-    }
-});
+// Service workers restart without another installation event.
+publishStatus(disconnectedStatus());
+connectToHost();

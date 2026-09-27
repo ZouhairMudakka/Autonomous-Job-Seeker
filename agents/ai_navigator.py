@@ -43,6 +43,7 @@ from storage.logs_manager import LogsManager
 import asyncio
 import time
 from datetime import datetime
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from collections import defaultdict
 
@@ -75,13 +76,13 @@ class AINavigator:
         self.max_retries = max_retries
         self.retry_count = 0
         self.logs_manager = logs_manager
-        
+
         # Initialize metrics tracking
         self.metrics = NavigationMetrics()
         self.start_time = time.time()
 
         # Initialize services
-        self.dom_service = DomService(page)
+        self.dom_service = DomService(page, settings=settings, logs_manager=logs_manager)
         self.telemetry = TelemetryManager(settings)
         self.locators = LinkedInLocators()
 
@@ -93,66 +94,61 @@ class AINavigator:
         self.cv_parser = CVParserAgent(settings, logs_manager)
 
     async def navigate(self, action, context) -> Tuple[bool, float]:
-        """
-        Main navigation method with confidence scoring.
-        Returns (success: bool, confidence: float).
-        """
+        """Execute one step with its own bounded retry budget."""
+        context = context or {}
         step = context.get("step", "unknown")
-        start_time = time.time()
-        
-        await self.logs_manager.info(f"Starting navigation for step: {step}")
-        await self._log_system_health()
-        
-        try:
-            confidence = await self._calculate_confidence(action, context)
-            await self.logs_manager.debug(f"Calculated confidence {confidence:.2f} for step {step}")
+        confidence = await self._calculate_confidence(action, context)
+        if confidence < self.min_confidence:
+            return await self._handle_low_confidence(action, confidence)
+        # A submission can succeed remotely even if its confirmation times out.
+        # Never automatically click Submit again after an uncertain result.
+        attempts = 1 if step == "submit_application" else max(1, self.max_retries)
+        self.retry_count = 0
+        for attempt in range(attempts):
+            started = time.monotonic()
+            try:
+                result = await action()
+                if result is False:
+                    raise RuntimeError(f"Step '{step}' reported failure")
+            except Exception as exc:
+                self.retry_count = attempt + 1
+                self.metrics.error_counts[step] += 1
+                await self._handle_error_with_context(exc, context)
+                if attempt + 1 == attempts:
+                    return await self._handle_failure(action, context, confidence, str(exc))
+                await asyncio.sleep(TimingConstants.BASE_RETRY_DELAY / 1000 * (2 ** attempt))
+                continue
+            await self._track_performance(step, time.monotonic() - started)
+            await self._log_success(action, context, confidence)
+            self.retry_count = 0
+            return True, confidence
+        return False, confidence
 
-            if confidence >= self.min_confidence:
-                try:
-                    await self.logs_manager.debug(f"Executing action for step {step}")
-                    await action()
-                    duration = time.time() - start_time
-                    await self._track_performance(step, duration)
-                    await self._log_success(action, context, confidence)
-                    return True, confidence
-
-                except Exception as e:
-                    self.retry_count += 1
-                    self.metrics.error_counts[step] += 1
-                    await self.logs_manager.warning(f"Action failed for step {step}: {str(e)}")
-                    await self._handle_error_with_context(e, context)
-                    
-                    if self.retry_count < self.max_retries:
-                        return await self._handle_retry(action, context, confidence, str(e))
-                    return await self._handle_failure(action, context, confidence, str(e))
-            else:
-                return await self._handle_low_confidence(action, confidence)
-                
-        except Exception as e:
-            duration = time.time() - start_time
-            await self.logs_manager.error(f"Navigation failed for step {step} after {duration:.2f}s: {str(e)}")
-            await self._handle_error_with_context(e, context)
-            raise
-
-    async def execute_master_plan(self, plan_steps: List[str]) -> Tuple[bool, float]:
+    async def execute_master_plan(self, plan_steps: List[str], before_step=None) -> Tuple[bool, float]:
         """
         Execute a series of steps in order, with dynamic captcha checks for critical steps.
-        
+
         Returns:
             Tuple[bool, float]: (success, overall_confidence)
         """
         start_time = time.time()
         await self.logs_manager.info(f"Starting master plan execution with {len(plan_steps)} steps")
         await self.logs_manager.debug(f"Plan steps: {', '.join(plan_steps)}")
-        
+
         overall_confidence = 1.0
-        executed_steps = []
+        self.current_plan = list(plan_steps)
+        self.current_step = 0
+        self.completed_steps = []
+        executed_steps = self.completed_steps
 
         try:
             for index, step in enumerate(plan_steps, 1):
+                self.current_step = index - 1
+                if before_step is not None:
+                    await before_step()
                 step_start_time = time.time()
                 await self.logs_manager.info(f"Executing step {index}/{len(plan_steps)}: {step}")
-                
+
                 try:
                     # Check CAPTCHA before critical steps
                     if step in self.critical_steps:
@@ -170,15 +166,16 @@ class AINavigator:
                     await self.logs_manager.debug(f"Starting execution of step: {step}")
                     success, confidence = await self._execute_step(step)
                     overall_confidence *= confidence
-                    
+
                     step_duration = time.time() - step_start_time
                     await self._track_performance(step, step_duration)
-                    
+
                     if not success:
                         await self.logs_manager.error(f"Step '{step}' failed with confidence {confidence:.2f}")
                         return False, overall_confidence
-                    
+
                     executed_steps.append(step)
+                    self.current_step = index
                     await self.logs_manager.info(f"Step '{step}' completed with confidence {confidence:.2f} in {step_duration:.2f}s")
 
                 except Exception as e:
@@ -199,9 +196,9 @@ class AINavigator:
         """Track performance metrics for operations."""
         self.metrics.performance_metrics[operation].append(duration)
         await self.logs_manager.debug(f"Performance: {operation} took {duration:.2f}s")
-        
+
         # Log if operation took longer than expected
-        if duration > TimingConstants.OPERATION_TIMEOUT:
+        if duration > (TimingConstants.DEFAULT_TIMEOUT / 1000):
             await self.logs_manager.warning(f"Operation {operation} took longer than expected: {duration:.2f}s")
 
     async def _handle_error_with_context(self, error: Exception, context: dict):
@@ -210,9 +207,9 @@ class AINavigator:
         await self.logs_manager.debug("Error context:")
         for key, value in context.items():
             await self.logs_manager.debug(f"- {key}: {value}")
-        
+
         # Log current state
-        current_url = await self.page.url
+        current_url = getattr(self.page, "url", "unavailable")
         await self.logs_manager.debug(f"Current URL: {current_url}")
         await self.logs_manager.debug(f"Retry count: {self.retry_count}")
         await self.logs_manager.debug(f"Total errors: {sum(self.metrics.error_counts.values())}")
@@ -224,7 +221,7 @@ class AINavigator:
         await self.logs_manager.debug(f"- Current confidence: {self.min_confidence}")
         await self.logs_manager.debug(f"- Total errors: {sum(self.metrics.error_counts.values())}")
         await self.logs_manager.debug(f"- Uptime: {time.time() - self.start_time:.2f}s")
-        
+
         # Log performance statistics if available
         if self.metrics.performance_metrics:
             await self.logs_manager.debug("Performance metrics:")
@@ -235,32 +232,32 @@ class AINavigator:
     async def _handle_state_transition(self, from_state: str, to_state: str, context: dict = None):
         """Log and handle state transitions."""
         transition_time = datetime.now().isoformat()
-        
+
         self.metrics.state_transitions.append({
             "from": from_state,
             "to": to_state,
             "timestamp": transition_time,
             "context": context or {}
         })
-        
+
         await self.logs_manager.info(f"State transition: {from_state} -> {to_state}")
         if context:
             await self.logs_manager.debug("Transition context:")
             for key, value in context.items():
                 await self.logs_manager.debug(f"- {key}: {value}")
-        
+
         self.metrics.last_state = to_state
 
     async def _log_navigation_path(self, current_url: str, target_url: str):
         """Log navigation path changes."""
         timestamp = datetime.now().isoformat()
-        
+
         self.metrics.navigation_history.append({
             "from_url": current_url,
             "to_url": target_url,
             "timestamp": timestamp
         })
-        
+
         await self.logs_manager.info(f"Navigation path: {current_url} -> {target_url}")
         await self.logs_manager.debug(f"Navigation timestamp: {timestamp}")
 
@@ -272,27 +269,31 @@ class AINavigator:
                 '.rate-limit-message, .too-many-requests',
                 timeout=1000
             )
-            
+
             if rate_limited:
                 await self.logs_manager.warning("Rate limiting detected")
                 delay = self.settings.get('rate_limit_delay', TimingConstants.BASE_RETRY_DELAY)
                 await self.logs_manager.info(f"Applying rate limit delay: {delay}ms")
                 return True
-            
+
             return False
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Error checking rate limits: {str(e)}")
             return False
 
     async def navigate_with_confidence(self, target: str):
-        """Example method if you want to track a custom navigation event."""
+        """Navigate to a URL and report the actual outcome."""
+        success, confidence = await self.navigate(
+            lambda: self.dom_service.goto(target), {"step": "navigate", "target": target}
+        )
         await self.telemetry.track_event(
             "navigation_attempt",
             {"target": target},
-            success=True,
-            confidence=self.min_confidence
+            success=success,
+            confidence=confidence,
         )
+        return success, confidence
 
     # -----------------------------------------
     # Additional Step Implementations
@@ -301,7 +302,7 @@ class AINavigator:
         """Verify user is logged in."""
         await self.logs_manager.info("Verifying login status...")
         if not await self.dom_service.check_element_present(
-            self.locators.PROFILE_BUTTON, timeout=3000
+            ", ".join(self.locators.LOGGED_IN_INDICATOR), timeout=3000
         ):
             await self.logs_manager.error("User not logged in.")
             raise Exception("User not logged in.")
@@ -309,9 +310,10 @@ class AINavigator:
     async def _navigate_to_jobs_page(self):
         """Navigate to LinkedIn's jobs page."""
         await self.logs_manager.info("Navigating to jobs page...")
-        await self.dom_service.goto(self.locators.JOBS_URL)
+        target = self.settings.get('job_url') or "https://www.linkedin.com/jobs/"
+        await self.dom_service.goto(target)
         found = await self.dom_service.check_element_present(
-            self.locators.JOBS_SEARCH_RESULTS,
+            self.locators.EASY_APPLY_BUTTON if self.settings.get('job_url') else ".jobs-search-results-list",
             timeout=5000
         )
         if not found:
@@ -322,17 +324,17 @@ class AINavigator:
         """Fill out job search form."""
         await self.logs_manager.info("Filling search form...")
         await self.dom_service.type_text(
-            self.locators.JOB_TITLE_INPUT,
+            self.locators.SEARCH_INPUT,
             self.settings.get('job_title', '')
         )
         await self.dom_service.type_text(
             self.locators.LOCATION_INPUT,
             self.settings.get('location', '')
         )
-        await self.dom_service.click_element(self.locators.SEARCH_BUTTON)
+        await self.dom_service.click_element("button.jobs-search-box__submit-button")
         # Wait for results
         found = await self.dom_service.check_element_present(
-            self.locators.JOBS_SEARCH_RESULTS,
+            ".jobs-search-results-list",
             timeout=5000
         )
         if not found:
@@ -342,10 +344,10 @@ class AINavigator:
     async def _click_apply_button(self):
         """Click the 'Apply' button on a job posting."""
         await self.logs_manager.info("Clicking apply button...")
-        await self.dom_service.click_element(self.locators.APPLY_BUTTON)
+        await self.dom_service.click_element(self.locators.EASY_APPLY_BUTTON)
         # Verify apply modal opened
         modal_open = await self.dom_service.check_element_present(
-            self.locators.APPLY_MODAL,
+            ".jobs-easy-apply-modal",
             timeout=3000
         )
         if not modal_open:
@@ -356,24 +358,36 @@ class AINavigator:
         """Retrieve or update user profile data via user_profile_agent."""
         await self.logs_manager.info("Handling user profile...")
         # Example usage:
-        profile = await self.user_profile_agent.get_profile("default_user_id")
+        if self.settings.get('form_data'):
+            return True
+        user_id = self.settings.get('user_id')
+        if not user_id:
+            raise ValueError('Configure a user_id or application form_data')
+        profile = await self.user_profile_agent.get_profile(user_id)
         if not profile:
             await self.logs_manager.error("User profile not found or could not load.")
             raise Exception("User profile not found or could not load.")
-        # Could store or modify profile data, e.g.:
-        # updated_profile = await self.user_profile_agent.update_profile(...)
+        profile_data = profile.model_dump()
+        self.settings['form_data'] = {
+            key: value for key, value in {
+                'full_name': profile_data.get('name'),
+                'email': profile_data.get('email'),
+                'phone': profile_data.get('phone'),
+                'location': profile_data.get('location'),
+                'cv_file': self.settings.get('cv_path') or profile_data.get('current_cv_path'),
+            }.items() if value is not None
+        }
 
     async def _fill_application_form(self):
         """Fill out the job application form (e.g., phone, address) with form_filler_agent."""
         await self.logs_manager.info("Filling application form with form_filler_agent...")
-        form_data = {
-            "full_name": "Alice Wonderland",
-            "phone": "123-456-7890",
-            "cv_file": "/path/to/resume.pdf",
-            # etc.
-        }
-        # Suppose form_filler_agent.fill_form returns True/False
-        success = await self.form_filler_agent.fill_form(form_data, form_mapping={})
+        form_data = self.settings.get("form_data")
+        form_mapping = self.settings.get("form_mapping")
+        if not isinstance(form_data, dict) or not form_data:
+            raise ValueError("Application form_data is required")
+        if not isinstance(form_mapping, dict) or not form_mapping:
+            raise ValueError("Application form_mapping is required")
+        success = await self.form_filler_agent.fill_form(form_data, form_mapping)
         if not success:
             await self.logs_manager.error("Form filling failed via form_filler_agent.")
             raise Exception("Form filling failed via form_filler_agent.")
@@ -388,19 +402,20 @@ class AINavigator:
         if error_banner:
             await self.logs_manager.error("Form validation error encountered")
             raise Exception("Form validation error encountered")
+        if not await self._verify_form_state():
+            raise ValueError("Required application fields are invalid")
 
     async def _submit_application(self):
         """Submit the application form."""
         await self.logs_manager.info("Submitting application form...")
-        await self.dom_service.click_element("button[type='submit']")
-        # Confirm success
-        success_banner = await self.dom_service.check_element_present(
-            ".application-success",
-            timeout=5000
+        success = await self.form_filler_agent.submit_form(
+            self.settings.get("submit_selector", "button[aria-label='Submit application']"),
+            success_selector=self.settings.get(
+                "application_success_selector", ".application-success, .artdeco-inline-feedback--success"
+            ),
         )
-        if not success_banner:
-            await self.logs_manager.error("No success banner - submission might have failed")
-            raise Exception("No success banner - submission might have failed")
+        if not success:
+            raise RuntimeError("Application submission was not confirmed")
 
     async def _track_application(self):
         """Track the application via tracker_agent."""
@@ -414,7 +429,7 @@ class AINavigator:
 
     async def _login_step(self):
         """Perform login if needed (placeholder)."""
-        await self.logs_manager.info("Logging in (placeholder)...")
+        await self._verify_login_status()
         # e.g., credentials_agent usage:
         # success = await self.credentials_agent.login_to_platform("LinkedIn")
         # if not success: raise Exception("Login failed")
@@ -437,6 +452,10 @@ class AINavigator:
             await self.logs_manager.error(f"Error checking for CAPTCHA: {str(e)}")
             return False
 
+    async def _ensure_no_captcha(self):
+        if await self._check_for_captcha():
+            await self._handle_captcha()
+
     async def _handle_captcha(self):
         """Solve or handle captcha with credentials_agent."""
         await self.logs_manager.info("Handling CAPTCHA...")
@@ -457,54 +476,56 @@ class AINavigator:
     async def _execute_step(self, step_name: str) -> Tuple[bool, float]:
         """Convert the step_name into an actual action method, then call `navigate`."""
         await self.logs_manager.debug(f"Preparing to execute step: {step_name}")
-        
+
         step_actions = {
             # Navigation steps
             "check_login": self._verify_login_status,
+            "login": self._login_step,
+            "check_captcha": self._ensure_no_captcha,
             "open_job_page": self._navigate_to_jobs_page,
             "fill_search": self._fill_search_form,
             "apply": self._click_apply_button,
-            
+
             # Form handling steps
             "handle_user_profile": self._handle_user_profile,
             "fill_application_form": self._fill_application_form,
             "validate_form": self._validate_form,
             "submit_application": self._submit_application,
             "track_application": self._track_application,
-            
+
             # Verification steps
             "verify_action": self._verify_action,
             "double_verify_action": self._double_verify_action,
             "extended_verification": self._handle_extended_verification,
-            
+
             # Recovery steps
             "recovery_check": self._handle_recovery_check,
             "state_restoration": self._handle_state_restoration,
-            
+
             # Rate limiting steps
             "rate_limit_delay": self._handle_rate_limit_delay,
             "extended_wait": self._handle_extended_wait,
         }
-        
+
         if step_name not in step_actions:
             await self.logs_manager.error(f"Unknown step: '{step_name}'")
             return False, 0.0
 
         action_method = step_actions[step_name]
         await self.logs_manager.debug(f"Mapped step '{step_name}' to method: {action_method.__name__}")
-        
+
         # Check for rate limiting before executing step
         if await self._monitor_rate_limits():
             await self.logs_manager.warning(f"Rate limiting detected before step: {step_name}")
             await self._handle_rate_limit_delay()
-        
+
         # Track state transition
         await self._handle_state_transition(
             from_state=self.metrics.last_state,
             to_state=step_name,
             context={"action": action_method.__name__}
         )
-        
+
         context = {"step": step_name}
         return await self.navigate(action_method, context)
 
@@ -560,8 +581,9 @@ class AINavigator:
         try:
             # 1. Check page responsiveness
             await self.logs_manager.debug("Checking page responsiveness")
-            await self.dom_service.check_element_present('body', timeout=2000)
-            
+            if not await self.dom_service.check_element_present('body', timeout=2000):
+                return False
+
             # 2. Check for error banners/messages
             await self.logs_manager.debug("Checking for error banners")
             error_present = await self.dom_service.check_element_present(
@@ -581,7 +603,7 @@ class AINavigator:
             if captcha_present:
                 await self.logs_manager.warning("CAPTCHA detected during verification")
                 return False
-            
+
             # 4. Verify DOM tree health
             await self.logs_manager.debug("Verifying DOM tree health")
             try:
@@ -615,10 +637,10 @@ class AINavigator:
                 return False
 
             # 7. Basic DOM health check
-            await asyncio.sleep(TimingConstants.VERIFICATION_DELAY)
+            await asyncio.sleep(TimingConstants.VERIFICATION_DELAY / 1000)
             await self.logs_manager.info("Verification completed successfully")
             return True
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Verification failed: {str(e)}")
             return False
@@ -629,8 +651,8 @@ class AINavigator:
         first_check = await self._verify_action()  # First verification
         if not first_check:
             return False
-            
-        await asyncio.sleep(TimingConstants.EXTENDED_VERIFICATION_DELAY)
+
+        await asyncio.sleep(TimingConstants.EXTENDED_VERIFICATION_DELAY / 1000)
         return await self._verify_action()  # Second verification
 
     async def _handle_extended_wait(self):
@@ -638,7 +660,7 @@ class AINavigator:
         await self.logs_manager.info("Starting extended wait period...")
         try:
             await self.logs_manager.debug(f"Waiting for {TimingConstants.EXTENDED_WAIT_DELAY}ms")
-            await asyncio.sleep(TimingConstants.EXTENDED_WAIT_DELAY)
+            await asyncio.sleep(TimingConstants.EXTENDED_WAIT_DELAY / 1000)
             await self.logs_manager.info("Extended wait completed")
         except Exception as e:
             await self.logs_manager.error(f"Error during extended wait: {str(e)}")
@@ -656,7 +678,7 @@ class AINavigator:
         try:
             # 1. Check page state
             await self.logs_manager.debug("Checking page state")
-            current_url = await self.page.url
+            current_url = self.page.url
             if "error" in current_url.lower() or "404" in current_url:
                 await self.logs_manager.warning("Error or 404 page detected")
                 return False
@@ -664,7 +686,7 @@ class AINavigator:
             # 2. Verify user session
             await self.logs_manager.debug("Verifying user session")
             session_valid = await self.dom_service.check_element_present(
-                self.locators.PROFILE_BUTTON,
+                ", ".join(self.locators.LOGGED_IN_INDICATOR),
                 timeout=2000
             )
             if not session_valid:
@@ -674,7 +696,8 @@ class AINavigator:
             # 3. Check DOM health
             await self.logs_manager.debug("Checking DOM health")
             try:
-                await self.dom_service.check_element_present('body', timeout=2000)
+                if not await self.dom_service.check_element_present('body', timeout=2000):
+                    return False
             except Exception:
                 await self.logs_manager.warning("DOM health check failed")
                 return False
@@ -708,7 +731,7 @@ class AINavigator:
         try:
             # 1. Verify page context
             await self.logs_manager.debug("Verifying page context")
-            current_url = await self.page.url
+            current_url = self.page.url
             if not await self._verify_page_context(current_url):
                 await self.logs_manager.warning("Page context verification failed")
                 return False
@@ -731,7 +754,7 @@ class AINavigator:
             # 4. Verify login state
             await self.logs_manager.debug("Verifying login state")
             login_valid = await self.dom_service.check_element_present(
-                self.locators.PROFILE_BUTTON,
+                ", ".join(self.locators.LOGGED_IN_INDICATOR),
                 timeout=2000
             )
             if not login_valid:
@@ -750,13 +773,13 @@ class AINavigator:
         await self.logs_manager.debug(f"Verifying page context for URL: {current_url}")
         try:
             # Check if we're on an expected page type
-            expected_urls = [
-                'linkedin.com/jobs',
-                'linkedin.com/in/',
-                'linkedin.com/feed',
-                # Add other valid URLs as needed
-            ]
-            is_valid = any(url in current_url for url in expected_urls)
+            parsed_url = urlsplit(current_url)
+            host = parsed_url.hostname or ""
+            is_valid = (
+                parsed_url.scheme == "https"
+                and (host == "linkedin.com" or host.endswith(".linkedin.com"))
+                and any(parsed_url.path.startswith(path) for path in ("/jobs", "/in/", "/feed"))
+            )
             if not is_valid:
                 await self.logs_manager.warning(f"Current URL does not match any expected patterns: {current_url}")
             return is_valid
@@ -769,19 +792,24 @@ class AINavigator:
         await self.logs_manager.debug("Verifying form state")
         try:
             # Check for common form elements
-            required_fields = await self.dom_service.get_elements(
+            required_fields = await self.dom_service.query_selector_all(
                 'input[required], select[required], textarea[required]'
             )
-            
+
             await self.logs_manager.debug(f"Found {len(required_fields)} required form fields")
-            
+
             # Verify required fields have values
             for field in required_fields:
-                value = await field.get_property('value')
+                field_type = await field.get_attribute('type')
+                if field_type in {'checkbox', 'radio'}:
+                    if not await field.evaluate('element => element.checkValidity()'):
+                        return False
+                    continue
+                value = await field.input_value()
                 if not value:
-                    await self.logs_manager.warning(f"Required field missing value: {await field.get_property('name')}")
+                    await self.logs_manager.warning(f"Required field missing value: {await field.get_attribute('name')}")
                     return False
-            
+
             return True
         except Exception as e:
             await self.logs_manager.error(f"Error verifying form state: {str(e)}")
@@ -797,12 +825,12 @@ class AINavigator:
                 '.global-nav',
                 '.navigation-bar'
             ]
-            
+
             for selector in nav_elements:
                 if await self.dom_service.check_element_present(selector, timeout=1000):
                     await self.logs_manager.debug(f"Found navigation element: {selector}")
                     return True
-            
+
             await self.logs_manager.warning("No navigation elements found")
             return False
         except Exception as e:
@@ -820,11 +848,11 @@ class AINavigator:
             if not await self._verify_action():
                 await self.logs_manager.warning("Initial verification check failed")
                 return False
-                
+
             # Additional delay
             await self.logs_manager.debug(f"Waiting {TimingConstants.EXTENDED_VERIFICATION_DELAY}ms for extended verification")
-            await asyncio.sleep(TimingConstants.EXTENDED_VERIFICATION_DELAY)
-            
+            await asyncio.sleep(TimingConstants.EXTENDED_VERIFICATION_DELAY / 1000)
+
             # Check for specific error conditions
             error_conditions = [
                 '.error-notification',
@@ -832,12 +860,12 @@ class AINavigator:
                 '.validation-error',
                 '.rate-limit-warning'
             ]
-            
+
             for selector in error_conditions:
                 if await self.dom_service.check_element_present(selector, timeout=1000):
                     await self.logs_manager.warning(f"Extended verification failed: found error condition '{selector}'")
                     return False
-            
+
             # Final verification
             final_check = await self._verify_action()
             if final_check:
@@ -845,7 +873,7 @@ class AINavigator:
             else:
                 await self.logs_manager.warning("Final verification check failed")
             return final_check
-            
+
         except Exception as e:
             await self.logs_manager.error(f"Extended verification failed with error: {str(e)}")
             return False
@@ -854,46 +882,49 @@ class AINavigator:
         """Execute action with DOM-based fallback if primary action fails."""
         start_time = time.time()
         action_name = action.__name__
-        
+
         await self.logs_manager.debug(f"Executing action: {action_name}")
         try:
             # Log current URL before action
-            current_url = await self.page.url
-            
+            current_url = self.page.url
+
             result = await action()
-            
+
             # Log URL after action if it changed
-            new_url = await self.page.url
+            new_url = self.page.url
             if new_url != current_url:
                 await self._log_navigation_path(current_url, new_url)
-            
+
             duration = time.time() - start_time
             await self._track_performance(action_name, duration)
             await self.logs_manager.debug(f"Action {action_name} completed successfully in {duration:.2f}s")
             return result
-            
+
         except Exception as e:
             duration = time.time() - start_time
             await self.logs_manager.warning(f"Primary action failed after {duration:.2f}s, attempting DOM fallback: {str(e)}")
-            
+
             # Track the error
             self.metrics.error_counts[action_name] += 1
-            
+
             # fallback to DOM-based approach
             elements = await self.dom_service.get_clickable_elements(highlight=True)
-            return await self._handle_dom_fallback(elements, action)
+            result = await self._handle_dom_fallback(elements, action)
+            if result is None or result is False:
+                raise
+            return result
 
     async def _handle_dom_fallback(self, elements, action):
         """AI-driven fallback logic when primary action fails."""
         action_name = action.__name__
         await self.logs_manager.info(f"Fallback triggered for {action_name}. Checking clickable elements in DOM...")
-        
+
         if not elements:
             await self.logs_manager.warning(f"No clickable elements found in DOM fallback for {action_name}")
             return None
-            
+
         await self.logs_manager.debug(f"Found {len(elements)} potential elements for fallback")
-        
+
         # Track state transition to fallback
         await self._handle_state_transition(
             from_state=self.metrics.last_state,
@@ -903,6 +934,6 @@ class AINavigator:
                 "elements_found": len(elements)
             }
         )
-        
+
         # You could add logic to pick the best element from `elements` if your plan is unclear
         return None

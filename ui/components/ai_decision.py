@@ -15,7 +15,7 @@ Usage Example:
     root = tk.Tk()
     decision_view = AIDecisionView(root)
     decision_view.pack(fill=tk.BOTH, expand=True)
-    
+
     # Update with new decision
     decision = AIDecision(
         confidence_score=0.85,
@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import logging
 from threading import Lock
+from .ui_dispatch import UIUpdateDispatcher
 
 # AI Decision Activity Types and Styling
 AI_ACTIVITY_TYPES = {
@@ -77,7 +78,7 @@ def get_tag_indicators(tag: str) -> List[str]:
 @dataclass
 class AIDecision:
     """Data structure for AI decision information.
-    
+
     Attributes:
         confidence_score: Float between 0 and 1 indicating decision confidence
         strategy: Current strategy being applied
@@ -92,20 +93,23 @@ class AIDecision:
     fallback_triggers: List[str]
     timestamp: datetime
     metadata: Dict[str, Any]  # Using Any from typing for better type safety
+    decision_id: str = ''
 
-class AIDecisionView(ttk.Frame):
+class AIDecisionView(UIUpdateDispatcher, ttk.Frame):
     """A component for visualizing AI decision-making processes in real-time."""
-    
+
     def __init__(self, parent, *args, **kwargs):
         """Initialize the AIDecisionView.
-        
+
         Args:
             parent: The parent widget
             *args: Variable length argument list
             **kwargs: Arbitrary keyword arguments
         """
         super().__init__(parent, *args, **kwargs)
+        self._init_ui_dispatcher()
         self.current_decision: Optional[AIDecision] = None
+        self.decision_history: List[AIDecision] = []
         self._update_lock = Lock()  # For thread-safe updates
         self._setup_ui()
         self._setup_bindings()
@@ -115,29 +119,29 @@ class AIDecisionView(ttk.Frame):
         # Confidence Score Section
         self.confidence_frame = ttk.LabelFrame(self, text="Confidence Score")
         self.confidence_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         self.confidence_canvas = tk.Canvas(
             self.confidence_frame,
             height=50,
-            bg=self.confidence_frame.cget('background')
+            bg=ttk.Style(self).lookup('TLabelframe', 'background') or '#f0f0f0'
         )
         self.confidence_canvas.pack(fill=tk.X, padx=5, pady=5)
-        
+
         # Strategy Section
         self.strategy_frame = ttk.LabelFrame(self, text="Current Strategy")
         self.strategy_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         self.strategy_label = ttk.Label(
             self.strategy_frame,
             text="No active strategy",
             wraplength=300
         )
         self.strategy_label.pack(padx=5, pady=5)
-        
+
         # Reasoning Section
         self.reasoning_frame = ttk.LabelFrame(self, text="Decision Reasoning")
         self.reasoning_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         self.reasoning_text = scrolledtext.ScrolledText(
             self.reasoning_frame,
             wrap=tk.WORD,
@@ -145,14 +149,14 @@ class AIDecisionView(ttk.Frame):
             width=50
         )
         self.reasoning_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Setup text tags for styling
         self._setup_text_tags()
-        
+
         # Fallback Triggers Section
         self.triggers_frame = ttk.LabelFrame(self, text="Fallback Triggers")
         self.triggers_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         self.triggers_list = tk.Listbox(
             self.triggers_frame,
             height=4,
@@ -167,28 +171,29 @@ class AIDecisionView(ttk.Frame):
 
     def schedule_ui_update(self, update_func: Callable):
         """Schedule a UI update to run on the main thread.
-        
+
         Args:
             update_func: The function to run on the main thread
         """
-        self.after_idle(update_func)
+        super().schedule_ui_update(update_func)
 
     def update_decision(self, decision: AIDecision):
         """Update the displayed decision information.
-        
+
         Args:
             decision: The AIDecision instance to display
         """
         try:
             with self._update_lock:
                 self.current_decision = decision
+                self.decision_history.append(decision)
                 self.schedule_ui_update(lambda: self._update_decision_display(decision))
         except Exception as e:
             logging.error(f"Error updating AI decision: {e}")
 
     def _update_decision_display(self, decision: AIDecision):
         """Update all UI elements with new decision data (internal).
-        
+
         Args:
             decision: The AIDecision instance to display
         """
@@ -206,27 +211,27 @@ class AIDecisionView(ttk.Frame):
 
     def _update_confidence_display(self, score: float):
         """Update the confidence score visualization.
-        
+
         Args:
             score: The confidence score value between 0 and 1
         """
         # Validate and clamp score
         score = max(0.0, min(1.0, score))
-        
+
         self.confidence_canvas.delete("all")
         width = self.confidence_canvas.winfo_width()
         height = self.confidence_canvas.winfo_height()
-        
+
         if width <= 1 or height <= 1:  # Skip if canvas not properly sized
             return
-        
+
         # Draw background
         self.confidence_canvas.create_rectangle(
             0, 0, width, height,
-            fill=self.confidence_frame.cget('background'),
+            fill=ttk.Style(self).lookup('TLabelframe', 'background') or '#f0f0f0',
             width=0
         )
-        
+
         # Draw confidence bar
         bar_width = width * score
         bar_color = (
@@ -234,7 +239,7 @@ class AIDecisionView(ttk.Frame):
             "#F1C40F" if score >= 0.4 else  # Yellow
             "#E74C3C"                       # Red
         )
-        
+
         # Draw bar with gradient effect
         self.confidence_canvas.create_rectangle(
             2, height/4,
@@ -243,7 +248,7 @@ class AIDecisionView(ttk.Frame):
             width=1,
             outline="#95A5A6"  # Subtle gray outline
         )
-        
+
         # Draw confidence text
         self.confidence_canvas.create_text(
             width/2, height/2,
@@ -255,7 +260,7 @@ class AIDecisionView(ttk.Frame):
 
     def _update_triggers_display(self, triggers: List[str]):
         """Update the fallback triggers display.
-        
+
         Args:
             triggers: List of fallback trigger strings
         """
@@ -282,6 +287,7 @@ class AIDecisionView(ttk.Frame):
         try:
             with self._update_lock:
                 self.current_decision = None
+                self.decision_history.clear()
                 self.schedule_ui_update(self._clear_display)
         except Exception as e:
             logging.error(f"Error clearing AI decision view: {e}")
@@ -295,7 +301,7 @@ class AIDecisionView(ttk.Frame):
 
     def get_selected_trigger(self) -> Optional[str]:
         """Get the currently selected fallback trigger.
-        
+
         Returns:
             The selected trigger string or None if nothing is selected
         """
@@ -306,7 +312,7 @@ class AIDecisionView(ttk.Frame):
 
     def apply_activity_filter(self, filter_type: str = "ALL", search_term: str = "") -> None:
         """Filter the displayed AI decisions based on type and search term.
-        
+
         Args:
             filter_type: The type of AI activities to show (from AI_FILTER_CATEGORIES)
             search_term: Optional search term to further filter the content
@@ -317,21 +323,21 @@ class AIDecisionView(ttk.Frame):
 
             # Get active tags for the filter type
             active_tags = AI_FILTER_CATEGORIES.get(filter_type, AI_FILTER_CATEGORIES["ALL"])
-            
+
             # Clear current display
             self.reasoning_text.config(state=tk.NORMAL)
             self.reasoning_text.delete(1.0, tk.END)
-            
+
             # Filter and display content
             lines = self._activity_content.splitlines()
             for line in lines:
                 if not line.strip():
                     continue
-                    
+
                 # Check search term
                 if search_term and search_term.lower() not in line.lower():
                     continue
-                    
+
                 # Check if line matches selected type
                 if filter_type != "ALL":
                     matches_type = False
@@ -341,15 +347,15 @@ class AIDecisionView(ttk.Frame):
                             break
                     if not matches_type:
                         continue
-                        
+
                 self._insert_line_with_tags(line)
-                
+
         except Exception as e:
             logging.error(f"Error applying AI decision filter: {str(e)}")
 
     def _insert_line_with_tags(self, line: str) -> None:
         """Insert a line with appropriate styling based on AI activity type.
-        
+
         Args:
             line: The line of text to insert
         """
@@ -360,7 +366,7 @@ class AIDecisionView(ttk.Frame):
                 if timestamp_end > 0:
                     self.reasoning_text.insert(tk.END, line[:timestamp_end], "timestamp")
                     line = line[timestamp_end:]
-            
+
             # Check content against all AI activity types
             for activity_type, activity_info in AI_ACTIVITY_TYPES.items():
                 indicators = get_tag_indicators(activity_type)
@@ -368,10 +374,10 @@ class AIDecisionView(ttk.Frame):
                     if indicator in line:
                         self.reasoning_text.insert(tk.END, line + "\n", activity_type)
                         return
-            
+
             # If no specific tag found, insert without tag
             self.reasoning_text.insert(tk.END, line + "\n")
-            
+
         except Exception as e:
             logging.error(f"Error inserting line with tags: {str(e)}")
 
@@ -379,7 +385,7 @@ class AIDecisionView(ttk.Frame):
         """Configure text tags for different AI activity types."""
         # Add timestamp tag
         self.reasoning_text.tag_configure("timestamp", foreground="#666666")
-        
+
         # Add tags for each AI activity type
         for activity_type, info in AI_ACTIVITY_TYPES.items():
             self.reasoning_text.tag_configure(
@@ -390,8 +396,8 @@ class AIDecisionView(ttk.Frame):
 
     def store_activity_content(self, content: str) -> None:
         """Store activity content for filtering.
-        
+
         Args:
             content: The full activity content to store
         """
-        self._activity_content = content 
+        self._activity_content = content

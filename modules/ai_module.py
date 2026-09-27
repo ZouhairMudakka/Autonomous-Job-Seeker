@@ -3,9 +3,11 @@ AI Module for handling chat interactions and LLM integration.
 Uses the universal model selector for LLM interactions.
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List
 import asyncio
 from datetime import datetime
+from uuid import uuid4
+import inspect
 from utils.universal_model import ModelSelector
 
 class AIModule:
@@ -59,19 +61,19 @@ class AIModule:
         "FEEDBACK": {"icon": "📝", "color": "#FF9800"}
     }
 
-    def __init__(self, model_name: str = None, **kwargs):
+    def __init__(self, model_name: str = None, logs_manager=None, model_selector=None, **kwargs):
         """Initialize the AI module with specified model."""
-        self.model_selector = ModelSelector()
+        self.model_selector = model_selector if model_selector is not None else ModelSelector(logs_manager)
         # Use the default model from ModelSelector if none specified
         self.model_name = model_name or self.model_selector.DEFAULT_TEXT_MODEL
-        self.config = kwargs
+        self.config = {key: value for key, value in kwargs.items() if key != 'chat_settings'}
         self.last_interaction = None
         self.conversation_history = []
-        
+
         # Initialize chat settings with defaults
         self.chat_settings = self.DEFAULT_CHAT_SETTINGS.copy()
         self.chat_settings.update(kwargs.get('chat_settings', {}))
-        
+
         # Initialize UX state
         self.typing_indicator_visible = False
         self.unread_messages = 0
@@ -79,21 +81,21 @@ class AIModule:
         self.suggested_responses = []
         self.pinned_messages = []
         self.message_reactions = {}  # Message ID -> List of reactions
-        
+
     def update_chat_settings(self, settings: Dict[str, Any]):
         """Update chat UX settings."""
         self.chat_settings.update(settings)
-        
+
     def get_chat_settings(self) -> Dict[str, Any]:
         """Get current chat UX settings."""
         return self.chat_settings.copy()
-        
+
     def get_quick_replies(self, category: str = None) -> List[str]:
         """Get quick reply suggestions for a category."""
         if category and category in self.QUICK_REPLIES:
             return self.QUICK_REPLIES[category]
         return sum(self.QUICK_REPLIES.values(), [])
-        
+
     def categorize_message(self, message: str) -> str:
         """Categorize a message based on its content."""
         message = message.lower()
@@ -108,17 +110,17 @@ class AIModule:
         elif any(word in message for word in ["thanks", "good", "great", "awesome"]):
             return "FEEDBACK"
         return "STATUS"
-        
+
     def format_message_for_display(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """Format a message for display in the GUI."""
         formatted = message.copy()
-        
+
         # Add message category and styling
         category = self.categorize_message(message["content"])
         formatted["category"] = category
         formatted["icon"] = self.MESSAGE_CATEGORIES[category]["icon"]
         formatted["color"] = self.MESSAGE_CATEGORIES[category]["color"]
-        
+
         # Format timestamp if enabled
         if self.chat_settings["show_timestamps"]:
             timestamp = message.get("timestamp")
@@ -126,11 +128,11 @@ class AIModule:
                 if isinstance(timestamp, str):
                     timestamp = datetime.fromisoformat(timestamp)
                 formatted["display_time"] = timestamp.strftime("%H:%M:%S")
-        
+
         # Add message status if enabled
         if self.chat_settings["show_message_status"]:
             formatted["status"] = message.get("status", "sent")
-            
+
         # Format code blocks if enabled
         if self.chat_settings["enable_code_highlighting"]:
             content = formatted["content"]
@@ -141,9 +143,9 @@ class AIModule:
                     if i < len(parts):
                         parts[i] = f'<code class="highlight">{parts[i]}</code>'
                 formatted["content"] = "".join(parts)
-                
+
         return formatted
-        
+
     def get_suggested_responses(self, message: str) -> List[str]:
         """Get suggested responses based on the current message."""
         category = self.categorize_message(message)
@@ -152,50 +154,50 @@ class AIModule:
         elif category == "COMMAND":
             return self.QUICK_REPLIES["automation"]
         return self.QUICK_REPLIES["job_search"]
-        
+
     def pin_message(self, message_id: str):
         """Pin a message for quick reference."""
         if message_id not in self.pinned_messages:
             self.pinned_messages.append(message_id)
-            
+
     def unpin_message(self, message_id: str):
         """Unpin a message."""
         if message_id in self.pinned_messages:
             self.pinned_messages.remove(message_id)
-            
+
     def add_reaction(self, message_id: str, reaction: str):
         """Add a reaction to a message."""
         if message_id not in self.message_reactions:
             self.message_reactions[message_id] = []
         if reaction not in self.message_reactions[message_id]:
             self.message_reactions[message_id].append(reaction)
-            
+
     def remove_reaction(self, message_id: str, reaction: str):
         """Remove a reaction from a message."""
         if message_id in self.message_reactions:
             if reaction in self.message_reactions[message_id]:
                 self.message_reactions[message_id].remove(reaction)
-                
+
     def get_message_reactions(self, message_id: str) -> List[str]:
         """Get all reactions for a message."""
         return self.message_reactions.get(message_id, [])
 
     def get_model_info(self) -> str:
         """Get information about the current AI model."""
-        token_limits = self.model_selector.get_token_limits(self.model_name)
-        vision_support = "Supports vision" if self.model_selector.supports_vision(self.model_name) else "No vision support"
+        token_limits = self.model_selector.token_limits(self.model_name)
+        vision_support = "Supports vision" if self.model_name in self.model_selector.VISION_MODELS else "No vision support"
         return f"{self.model_name} ({vision_support}, Input: {token_limits['input']}, Output: {token_limits['output']} tokens)"
-        
+
     async def process_message(self, message: str) -> str:
         """Process a user message and generate a response using the universal model."""
         try:
             self.last_interaction = datetime.now()
-            message_id = f"msg_{int(datetime.now().timestamp())}"
-            
+            message_id = f"msg_{uuid4()}"
+
             # Validate message length
             if len(message) > self.chat_settings["max_message_length"]:
                 raise ValueError(f"Message exceeds maximum length of {self.chat_settings['max_message_length']} characters")
-            
+
             # Add message to conversation history with UX metadata
             user_message = {
                 "id": message_id,
@@ -205,24 +207,24 @@ class AIModule:
                 "status": "sent",
                 "category": self.categorize_message(message)
             }
-            
+
             self.conversation_history.append(user_message)
-            
+
             # Get suggested responses for quick replies
             self.suggested_responses = self.get_suggested_responses(message)
-            
+
             # Format messages for the model
             formatted_messages = self._format_messages_for_model()
-            
+
             # Get response from the model
-            response = self.model_selector.chat_completion(
+            response = await self.model_selector.chat_completion(
                 messages=formatted_messages,
                 model=self.model_name,
                 **self.config
             )
-            
+
             # Add response to conversation history with UX metadata
-            response_id = f"msg_{int(datetime.now().timestamp())}"
+            response_id = f"msg_{uuid4()}"
             assistant_message = {
                 "id": response_id,
                 "role": "assistant",
@@ -231,20 +233,20 @@ class AIModule:
                 "status": "delivered",
                 "category": self.categorize_message(response)
             }
-            
+
             self.conversation_history.append(assistant_message)
-            
+
             # Update UX state
             self.unread_messages += 1
-            
+
             # Keep only last 50 messages
             if len(self.conversation_history) > 50:
                 self.conversation_history = self.conversation_history[-50:]
-                
+
             return response
-            
+
         except Exception as e:
-            error_id = f"msg_{int(datetime.now().timestamp())}"
+            error_id = f"msg_{uuid4()}"
             error_message = {
                 "id": error_id,
                 "role": "system",
@@ -255,7 +257,7 @@ class AIModule:
             }
             self.conversation_history.append(error_message)
             raise Exception(f"Error processing message: {str(e)}")
-    
+
     def _format_messages_for_model(self) -> List[Dict[str, str]]:
         """Format conversation history for the model."""
         system_message = {
@@ -264,25 +266,27 @@ class AIModule:
                       "You can help users with their job search, provide advice, and answer questions "
                       "about the automation process."
         }
-        
+
         # Convert conversation history to model format
         messages = [system_message]
         for msg in self.conversation_history[-10:]:  # Only use last 10 messages
+            if msg.get('status') == 'error':
+                continue
             messages.append({
                 "role": msg["role"],
                 "content": msg["content"]
             })
-            
+
         return messages
-            
+
     def get_conversation_history(self) -> list:
         """Get the conversation history."""
         return self.conversation_history
-        
+
     def clear_conversation_history(self):
         """Clear the conversation history."""
         self.conversation_history = []
-        
+
     async def get_completion(
         self,
         prompt: str,
@@ -298,17 +302,14 @@ class AIModule:
                 "role": "user",
                 "content": prompt
             }]
-            
-            return self.model_selector.chat_completion(
-                messages=messages,
-                model=self.model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                **self.config
+
+            config = {**self.config, 'max_tokens': max_tokens, 'temperature': temperature}
+            return await self.model_selector.chat_completion(
+                messages=messages, model=self.model_name, **config
             )
         except Exception as e:
             raise Exception(f"Error getting completion: {str(e)}")
-            
+
     def change_model(self, new_model: str):
         """Change the active model."""
         if new_model in self.model_selector.OPENAI_MODELS + \
@@ -317,7 +318,7 @@ class AIModule:
             self.model_name = new_model
         else:
             raise ValueError(f"Unsupported model: {new_model}")
-            
+
     def get_available_models(self) -> Dict[str, List[str]]:
         """Get all available models grouped by provider."""
         return {
@@ -330,12 +331,12 @@ class AIModule:
         """Process a user message and generate a streaming response."""
         try:
             self.last_interaction = datetime.now()
-            message_id = f"msg_{int(datetime.now().timestamp())}"
-            
+            message_id = f"msg_{uuid4()}"
+
             # Validate message length
             if len(message) > self.chat_settings["max_message_length"]:
                 raise ValueError(f"Message exceeds maximum length of {self.chat_settings['max_message_length']} characters")
-            
+
             # Add message to conversation history with UX metadata
             user_message = {
                 "id": message_id,
@@ -345,21 +346,21 @@ class AIModule:
                 "status": "sent",
                 "category": self.categorize_message(message)
             }
-            
+
             self.conversation_history.append(user_message)
-            
+
             # Get suggested responses for quick replies
             self.suggested_responses = self.get_suggested_responses(message)
-            
+
             # Format messages for the model
             formatted_messages = self._format_messages_for_model()
-            
+
             # Show typing indicator if enabled
             if self.chat_settings["show_typing_indicator"]:
                 self.typing_indicator_visible = True
                 if chunk_callback:
-                    await chunk_callback("typing_start")
-            
+                    await self._notify_callback(chunk_callback, "typing_start")
+
             # Get streaming response from the model
             response = await self.model_selector.stream_chat_response(
                 messages=formatted_messages,
@@ -367,15 +368,15 @@ class AIModule:
                 chunk_callback=self._create_streaming_callback(chunk_callback),
                 **self.config
             )
-            
+
             # Hide typing indicator
             if self.chat_settings["show_typing_indicator"]:
                 self.typing_indicator_visible = False
                 if chunk_callback:
-                    await chunk_callback("typing_end")
-            
+                    await self._notify_callback(chunk_callback, "typing_end")
+
             # Add complete response to conversation history with UX metadata
-            response_id = f"msg_{int(datetime.now().timestamp())}"
+            response_id = f"msg_{uuid4()}"
             assistant_message = {
                 "id": response_id,
                 "role": "assistant",
@@ -385,20 +386,20 @@ class AIModule:
                 "category": self.categorize_message(response["content"]),
                 "metadata": response["metadata"]
             }
-            
+
             self.conversation_history.append(assistant_message)
-            
+
             # Update UX state
             self.unread_messages += 1
-            
+
             # Keep only last 50 messages
             if len(self.conversation_history) > 50:
                 self.conversation_history = self.conversation_history[-50:]
-                
+
             return response["content"]
-            
+
         except Exception as e:
-            error_id = f"msg_{int(datetime.now().timestamp())}"
+            error_id = f"msg_{uuid4()}"
             error_message = {
                 "id": error_id,
                 "role": "system",
@@ -408,45 +409,57 @@ class AIModule:
                 "category": "ERROR"
             }
             self.conversation_history.append(error_message)
-            
+
             # Hide typing indicator on error
             if self.chat_settings["show_typing_indicator"]:
                 self.typing_indicator_visible = False
                 if chunk_callback:
-                    await chunk_callback("typing_end")
-                    
+                    await self._notify_callback(chunk_callback, "typing_end")
+
             raise Exception(f"Error processing message stream: {str(e)}")
+
+        finally:
+            if self.typing_indicator_visible:
+                self.typing_indicator_visible = False
+                if chunk_callback:
+                    await self._notify_callback(chunk_callback, "typing_end")
+
+    @staticmethod
+    async def _notify_callback(callback, value):
+        result = callback(value)
+        if inspect.isawaitable(result):
+            await result
 
     def _create_streaming_callback(self, original_callback):
         """Create a callback that handles streaming chunks with UX features."""
         async def enhanced_callback(chunk):
             if not chunk:
                 return
-                
+
             # Apply typing animation if enabled
             if self.chat_settings["typing_speed"] > 0:
                 chunk_length = len(chunk)
                 delay = chunk_length / self.chat_settings["typing_speed"]
                 await asyncio.sleep(delay)
-            
+
             # Format code blocks if enabled
             if self.chat_settings["enable_code_highlighting"] and "```" in chunk:
                 chunk = self._format_code_block(chunk)
-            
+
             # Call original callback with enhanced chunk
             if original_callback:
-                await original_callback(chunk)
-                
+                await self._notify_callback(original_callback, chunk)
+
         return enhanced_callback
 
     def _format_code_block(self, text: str) -> str:
         """Format code blocks with syntax highlighting."""
         if not self.chat_settings["enable_code_highlighting"]:
             return text
-            
+
         if "```" not in text:
             return text
-            
+
         parts = text.split("```")
         for i in range(1, len(parts), 2):
             if i < len(parts):
@@ -477,24 +490,24 @@ class AIModule:
             total_messages = len(self.conversation_history)
             user_messages = sum(1 for msg in self.conversation_history if msg["role"] == "user")
             ai_messages = sum(1 for msg in self.conversation_history if msg["role"] == "assistant")
-            
+
             # Calculate average response time if metadata is available
             response_times = []
             for i in range(1, len(self.conversation_history)):
-                if (self.conversation_history[i]["role"] == "assistant" and 
+                if (self.conversation_history[i]["role"] == "assistant" and
                     "metadata" in self.conversation_history[i]):
                     metadata = self.conversation_history[i]["metadata"]
                     if "response_time" in metadata:
                         response_times.append(metadata["response_time"])
-            
+
             avg_response_time = sum(response_times) / len(response_times) if response_times else None
-            
+
             # Get token usage if available
             total_tokens = 0
             for msg in self.conversation_history:
                 if "metadata" in msg and "token_count" in msg["metadata"]:
                     total_tokens += msg["metadata"]["token_count"]
-            
+
             return {
                 "total_messages": total_messages,
                 "user_messages": user_messages,
@@ -506,4 +519,4 @@ class AIModule:
                 "current_model": self.model_name
             }
         except Exception as e:
-            raise Exception(f"Error getting conversation stats: {str(e)}") 
+            raise Exception(f"Error getting conversation stats: {str(e)}")

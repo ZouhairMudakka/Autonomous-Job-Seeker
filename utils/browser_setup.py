@@ -23,6 +23,8 @@ import platform
 import os
 from storage.logs_manager import LogsManager
 from utils.telemetry import TelemetryManager
+from utils.console_input import async_input
+from storage.file_utils import atomic_text_writer
 
 class BrowserSetup:
     # Default paths for different browsers based on OS
@@ -49,7 +51,7 @@ class BrowserSetup:
         Initialize browser configuration.
 
         Args:
-            settings (Dict): 
+            settings (Dict):
                 Typically loaded from config/settings, containing:
                 {
                   "browser": {
@@ -70,6 +72,10 @@ class BrowserSetup:
         self.settings = settings.get('browser', {})
         self.telemetry = TelemetryManager(settings)
         self.logs_manager = logs_manager
+        self._playwright = None
+        self._browser_or_context = None
+        self._page = None
+        self._attached = False
 
         # Determine data directory
         data_dir = (
@@ -105,6 +111,11 @@ class BrowserSetup:
 
     def _get_browser_path(self) -> Optional[str]:
         """Get the appropriate browser executable path based on OS and self.browser_type."""
+        configured = self.settings.get('executable_path')
+        if configured:
+            if not Path(configured).is_file():
+                raise FileNotFoundError(f"Browser executable not found: {configured}")
+            return str(configured)
         os_name = platform.system()
         if os_name not in self.BROWSER_PATHS:
             return None
@@ -119,9 +130,9 @@ class BrowserSetup:
         try:
             await self.logs_manager.info(f"Attempting to connect to existing {self.browser_type} browser...")
             await self.logs_manager.debug(f"CDP URL: {self.cdp_url}")
-            
+
             # Only chromium-based attach is fully supported
-            if self.browser_type in ['edge', 'chrome']:
+            if self.browser_type in ['edge', 'chrome', 'chromium']:
                 await self.logs_manager.info(f"Initiating CDP connection to {self.browser_type}...")
                 browser = await playwright.chromium.connect_over_cdp(self.cdp_url)
                 await self.logs_manager.info("CDP connection established successfully")
@@ -131,7 +142,7 @@ class BrowserSetup:
                 await self.logs_manager.error(msg)
                 raise NotImplementedError(msg)
             else:
-                msg = f"Browser attachment only supported for edge/chrome, got: {self.browser_type}"
+                msg = f"Browser attachment only supported for edge/chrome/chromium, got: {self.browser_type}"
                 await self.logs_manager.error(msg)
                 raise NotImplementedError(msg)
         except Exception as e:
@@ -160,9 +171,10 @@ class BrowserSetup:
             context = await playwright.firefox.launch_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=self.headless,
-                args=["--no-sandbox"],
+                user_agent=self.user_agent or None,
                 firefox_user_prefs=firefox_prefs
             )
+            self._browser_or_context = context
             await self.logs_manager.info("Firefox context created successfully")
 
             if context.pages:
@@ -190,7 +202,6 @@ class BrowserSetup:
             await self.logs_manager.info(f"Preparing to launch {self.browser_type} with persistent profile...")
 
             launch_args = [
-                "--no-sandbox",
                 "--disable-dev-shm-usage"
             ]
             ignore_args = [
@@ -202,9 +213,13 @@ class BrowserSetup:
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=self.headless,
+                executable_path=self.executable_path,
+                channel={'edge': 'msedge', 'chrome': 'chrome'}.get(self.browser_type) if not self.executable_path else None,
+                user_agent=self.user_agent or None,
                 args=launch_args,
                 ignore_default_args=ignore_args
             )
+            self._browser_or_context = context
             await self.logs_manager.info(f"{self.browser_type} context created successfully")
 
             if context.pages:
@@ -224,31 +239,31 @@ class BrowserSetup:
 
     async def initialize(self, attach_existing: bool = False) -> Tuple[Union[Browser, BrowserContext], Page]:
         """
-        Initialize and configure the browser instance. 
+        Initialize and configure the browser instance.
         Returns (browser_or_context, page).
         If attach_existing=True, attempt to connect to an existing session (Edge/Chrome).
         """
         await self.logs_manager.info("Starting browser initialization process...")
+        if self._playwright is not None:
+            raise RuntimeError("Browser is already initialized; clean it up before initializing again")
 
         # Handle browser selection if needed
-        should_prompt = self.settings.get('should_prompt', True)
+        should_prompt = self.settings.get('should_prompt', not bool(self.settings.get('type')))
         if should_prompt or not self.settings.get('type'):
             await self.logs_manager.info("Browser selection required")
-            
+
             # Print options for user interaction
             print("\nSelect Browser:")  # Keep print for user interface
             print("1) Edge (recommended)")
             print("2) Chrome")
             print("3) Firefox")
             print("4) Attach to existing browser (Chromium-based)")
-            
+
             while True:
                 try:
-                    choice = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: input("\nSelect browser (1-4): ").strip()
-                    )
+                    choice = (await async_input("\nSelect browser (1-4): ")).strip()
                     await self.logs_manager.debug(f"User input received: {choice}")
-                    
+
                     if choice == '1':
                         self.browser_type = 'edge'
                         attach_existing = False
@@ -272,6 +287,8 @@ class BrowserSetup:
                     else:
                         print("Invalid choice. Please select 1-4.")  # Keep print for immediate user feedback
                         await self.logs_manager.warning(f"Invalid browser choice: {choice}")
+                except (EOFError, OSError) as e:
+                    raise RuntimeError("Browser selection requires input; configure browser.type and disable should_prompt") from e
                 except Exception as e:
                     print(f"Error: {str(e)}. Please try again.")  # Keep print for immediate user feedback
                     await self.logs_manager.error(f"Browser selection error: {str(e)}")
@@ -291,14 +308,20 @@ class BrowserSetup:
 
         await self.logs_manager.info("Starting Playwright...")
         playwright = await async_playwright().start()
+        self._playwright = playwright
+        self._attached = attach_existing
         await self.logs_manager.debug("Playwright started successfully")
 
         try:
             if attach_existing:
                 await self.logs_manager.info("Initiating attachment to existing browser session...")
                 browser = await self._attach_to_browser(playwright)
+                self._browser_or_context = browser
                 await self.logs_manager.info("Creating new page in attached browser...")
-                page = await browser.new_page()
+                if not browser.contexts:
+                    raise RuntimeError("The attached browser has no existing context")
+                page = await browser.contexts[0].new_page()
+                self._page = page
                 await self.logs_manager.info("Successfully created new page in attached browser")
                 await self._configure_page(page)
                 await self.telemetry.track_browser_setup(
@@ -312,7 +335,7 @@ class BrowserSetup:
             if self.browser_type == 'firefox':
                 await self.logs_manager.info("Initiating Firefox browser launch...")
                 context, page = await self._launch_firefox_persistent(playwright)
-            elif self.browser_type in ['edge', 'chrome']:
+            elif self.browser_type in ['edge', 'chrome', 'chromium']:
                 await self.logs_manager.info(f"Initiating {self.browser_type} browser launch...")
                 context, page = await self._launch_chromium_persistent(playwright)
             else:
@@ -320,6 +343,7 @@ class BrowserSetup:
                 await self.logs_manager.error(error_msg)
                 raise ValueError(error_msg)
 
+            self._page = page
             await self._configure_page(page)
             await self.telemetry.track_browser_setup(
                 browser_type=self.browser_type,
@@ -329,12 +353,15 @@ class BrowserSetup:
             await self.logs_manager.info("Browser initialization completed successfully")
             return context, page
 
-        except Exception as e:
+        except BaseException as e:
+            # Release all resources even when startup is cancelled midway.
+            await self._release_resources()
+            if not isinstance(e, Exception):
+                raise
             error_msg = f"Browser initialization failed: {str(e)}"
             await self.logs_manager.error(error_msg)
             await self.logs_manager.debug(f"Full error details: {repr(e)}")
             await self.logs_manager.info("Stopping Playwright due to initialization failure...")
-            await playwright.stop()
             await self.telemetry.track_browser_setup(
                 browser_type=self.browser_type,
                 headless=self.headless,
@@ -362,7 +389,7 @@ class BrowserSetup:
                 await self.logs_manager.debug("User agent set successfully")
 
             # Load cookies if available
-            if self.cookies_path.exists():
+            if not self._attached and self.cookies_path.exists():
                 await self.logs_manager.info("Found existing cookies file, attempting to load...")
                 try:
                     cookies = json.loads(self.cookies_path.read_text())
@@ -390,11 +417,15 @@ class BrowserSetup:
         try:
             await self.logs_manager.info("Starting cookie save process...")
             await self.logs_manager.debug(f"Cookie save path: {self.cookies_path}")
-            
+
             cookies = await page.context.cookies()
             await self.logs_manager.debug(f"Retrieved {len(cookies)} cookies from browser")
-            
-            self.cookies_path.write_text(json.dumps(cookies, indent=2))
+
+            self.cookies_path.parent.mkdir(parents=True, exist_ok=True)
+            with atomic_text_writer(self.cookies_path) as stream:
+                json.dump(cookies, stream, indent=2)
+            if os.name != "nt":
+                self.cookies_path.chmod(0o600)
             await self.logs_manager.info(f"Successfully saved {len(cookies)} cookies to disk")
         except Exception as e:
             error_msg = f"Failed to save cookies: {str(e)}"
@@ -406,22 +437,35 @@ class BrowserSetup:
         """Clean up browser resources, persisting cookies if possible."""
         try:
             await self.logs_manager.info("Starting browser cleanup process...")
-            
+
             # Try to save cookies first
             try:
-                await self.save_cookies(page)
+                if not self._attached and page is not None:
+                    await self.save_cookies(page)
             except Exception as cookie_error:
                 await self.logs_manager.warning(f"Cookie save during cleanup failed: {str(cookie_error)}")
                 await self.logs_manager.debug("Continuing with cleanup despite cookie save failure")
-            
-            if hasattr(browser_or_context, 'close'):
-                await self.logs_manager.info("Closing browser/context...")
-                await browser_or_context.close()
-                await self.logs_manager.info("Browser cleanup completed successfully")
-            else:
-                await self.logs_manager.warning(f"Unknown browser object type ({type(browser_or_context)}), cannot close properly")
+
+            # The user's attached browser and its pre-existing tabs belong to them.
+            # Close only our page, then disconnect the Playwright driver.
         except Exception as e:
             error_msg = f"Error during browser cleanup: {str(e)}"
             await self.logs_manager.error(error_msg)
             await self.logs_manager.debug(f"Full error details: {repr(e)}")
             raise Exception(error_msg)
+        finally:
+            await self._release_resources()
+
+    async def _release_resources(self):
+        """Release resources created by this setup, including the driver."""
+        resource = self._page if self._attached else self._browser_or_context
+        driver = self._playwright
+        self._page = None
+        self._browser_or_context = None
+        self._playwright = None
+        try:
+            if resource is not None:
+                await resource.close()
+        finally:
+            if driver is not None:
+                await driver.stop()

@@ -127,8 +127,7 @@ data/cookies/
 browser_cookies.json
 browser_cookies.*
 data/**/*
-*.csv
-*.json
+# Keep source manifests and test fixtures trackable; runtime data is ignored above.
 !data/cookies/README.md  # Keep the README
 data/*
 !data/cookies/README.md
@@ -138,3 +137,6 @@ ui/extension/linkedin_automation_host.json
 browser_data/
 telemetry.python-313.pyc
 universal_model.cpython-313.pyc
+
+.ruff_cache/
+test_data/

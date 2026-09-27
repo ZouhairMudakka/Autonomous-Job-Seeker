@@ -10,18 +10,22 @@ Replaces the old thread-based design with async/await logic.
 import asyncio
 import time
 from constants import TimingConstants, Messages
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Coroutine
+from uuid import uuid4
+
+_DEFAULT_TIMEOUT = object()
 
 class Task:
     def __init__(self, coroutine: Coroutine, task_id: str = None):
         self.coroutine = coroutine
-        self.task_id = task_id or datetime.now().isoformat()
+        self.task_id = task_id or str(uuid4())
         self.created_at = datetime.now()
         self.completed_at = None
         self.status = 'pending'
         self.result = None
         self.error = None
+        self.runner = None
 
 class TaskManager:
     def __init__(self, controller):
@@ -33,43 +37,56 @@ class TaskManager:
         self.tasks = {}
         self.active_tasks = set()
         self.max_concurrent = 3
-        self.queue_check_interval = TimingConstants.QUEUE_CHECK_INTERVAL
-        self.task_timeout = TimingConstants.TASK_TIMEOUT
+        self.queue_check_interval = TimingConstants.QUEUE_CHECK_INTERVAL / 1000
+        self.task_timeout = TimingConstants.TASK_TIMEOUT / 1000
         self.logs_manager = controller.logs_manager
+        self.task_queue = asyncio.Queue()
+        self.is_running = False
+        self.processor_task = None
+        self._slots = asyncio.Condition()
 
-    async def create_task(self, coroutine: Coroutine, task_id: str = None) -> Task:
+    async def create_task(self, coroutine: Coroutine, task_id: str = None, timeout=_DEFAULT_TIMEOUT) -> Task:
         """Create a new task."""
         task = Task(coroutine, task_id)
+        task.timeout = self.task_timeout if timeout is _DEFAULT_TIMEOUT else timeout
+        if task.task_id in self.tasks:
+            coroutine.close()
+            raise ValueError(f"Task ID already exists: {task.task_id}")
         self.tasks[task.task_id] = task
-        
+
         await self.controller.tracker_agent.log_activity(
             activity_type='task',
             details=Messages.TASK_CREATED.format(task.task_id),
             status='created',
             agent_name='TaskManager'
         )
-        
+
         return task
 
     async def run_task(self, task: Task) -> Any:
         """Run a task with timeout and error handling."""
+        if self.tasks.get(task.task_id) is not task or task.status != 'pending':
+            raise ValueError("Only a pending task owned by this manager can be run")
+        task.status = 'queued'
+        task.runner = asyncio.current_task()
+        started = False
         try:
-            if len(self.active_tasks) >= self.max_concurrent:
-                await self._wait_for_slot()
-
-            self.active_tasks.add(task.task_id)
+            async with self._slots:
+                await self._slots.wait_for(lambda: len(self.active_tasks) < self.max_concurrent)
+                self.active_tasks.add(task.task_id)
             task.status = 'running'
+            started = True
 
             # Run with timeout
             result = await asyncio.wait_for(
                 task.coroutine,
-                timeout=self.task_timeout
+                timeout=task.timeout
             )
 
             task.status = 'completed'
             task.completed_at = datetime.now()
             task.result = result
-            
+
             await self.controller.tracker_agent.log_activity(
                 activity_type='task',
                 details=Messages.TASK_COMPLETED.format(task.task_id),
@@ -79,6 +96,11 @@ class TaskManager:
 
             return result
 
+        except asyncio.CancelledError:
+            task.status = 'cancelled'
+            task.error = 'Task cancelled'
+            raise
+
         except asyncio.TimeoutError:
             task.status = 'timeout'
             task.error = 'Task timed out'
@@ -87,18 +109,24 @@ class TaskManager:
         except Exception as e:
             task.status = 'failed'
             task.error = str(e)
-            
+
             await self.controller.tracker_agent.log_activity(
                 activity_type='task',
                 details=Messages.TASK_FAILED.format(f"{task.task_id}: {str(e)}"),
                 status='error',
                 agent_name='TaskManager'
             )
-            
+
             raise
 
         finally:
-            self.active_tasks.discard(task.task_id)
+            task.completed_at = datetime.now()
+            task.runner = None
+            if not started:
+                task.coroutine.close()
+            async with self._slots:
+                self.active_tasks.discard(task.task_id)
+                self._slots.notify_all()
 
     async def _wait_for_slot(self):
         """Wait for a task slot to become available."""
@@ -112,16 +140,20 @@ class TaskManager:
     def get_active_tasks(self) -> list[Task]:
         """Get list of currently active tasks."""
         return [
-            self.tasks[task_id] 
+            self.tasks[task_id]
             for task_id in self.active_tasks
         ]
 
     async def cancel_task(self, task_id: str) -> bool:
         """Cancel a running task."""
         task = self.tasks.get(task_id)
-        if task and task.status == 'running':
+        if task and task.status in {'pending', 'queued', 'running'}:
+            if task.runner is not None:
+                task.runner.cancel()
+            else:
+                task.coroutine.close()
             task.status = 'cancelled'
-            self.active_tasks.discard(task_id)
+            task.completed_at = datetime.now()
             return True
         return False
 
@@ -177,20 +209,18 @@ class TaskManager:
         """Continuously checks the queue for new tasks and processes them."""
         try:
             while self.is_running:
-                if not self.task_queue.empty():
-                    task = await self.task_queue.get()
-                    try:
-                        await self._execute_task(task)
-                    except Exception as e:
-                        await self.controller.tracker_agent.log_activity(
-                            activity_type='task_error',
-                            details=Messages.TASK_FAILED.format(str(e)),
-                            status='error',
-                            agent_name='TaskManager'
-                        )
-                else:
-                    # Use constant for queue check interval
-                    await asyncio.sleep(TimingConstants.QUEUE_CHECK_INTERVAL)
+                task = await self.task_queue.get()
+                try:
+                    await self._execute_task(task)
+                except Exception as e:
+                    await self.controller.tracker_agent.log_activity(
+                        activity_type='task_error',
+                        details=Messages.TASK_FAILED.format(str(e)),
+                        status='error',
+                        agent_name='TaskManager'
+                    )
+                finally:
+                    self.task_queue.task_done()
         except asyncio.CancelledError:
             # This means stop_processing() was called, so we do a graceful exit
             pass
@@ -205,16 +235,20 @@ class TaskManager:
                 job_title = params.get('job_title')
                 location = params.get('location')
                 await self.controller.run_linkedin_flow(job_title, location)
-                
+
             elif task_type == 'captcha':
-                await self.controller.credentials_agent.handle_captcha()
-                
+                solution = await self.controller.credentials_agent.handle_captcha(
+                    params.get('selector', 'img.captcha__image')
+                )
+                if not solution:
+                    raise RuntimeError("CAPTCHA was not resolved")
+
             elif task_type == 'state_restoration':
                 # Handle state restoration with verification
                 success = await self.controller._restore_session_state()
                 if not success:
                     raise Exception("State restoration failed")
-                
+
                 # Verify restoration with AI Navigator
                 verify_success, confidence = await self.controller.ai_navigator.execute_master_plan([
                     "verify_action",
@@ -222,7 +256,7 @@ class TaskManager:
                 ])
                 if not verify_success:
                     raise Exception(f"State restoration verification failed (confidence: {confidence})")
-                
+
             elif task_type == 'recovery':
                 # Handle recovery tasks
                 success, confidence = await self.controller.ai_navigator.execute_master_plan([
@@ -231,7 +265,7 @@ class TaskManager:
                 ])
                 if not success:
                     raise Exception(f"Recovery failed (confidence: {confidence})")
-                
+
             elif task_type == 'verification':
                 # Handle standalone verification tasks
                 verify_params = params.get('verify_params', {})
@@ -241,11 +275,10 @@ class TaskManager:
                 ])
                 if not success:
                     raise Exception(f"Verification failed (confidence: {confidence})")
-            
+
             else:
                 # Unknown or future tasks
-                print(f"[TaskManager] Unknown task type: {task_type}")
-                return
+                raise ValueError(f"Unknown task type: {task_type}")
 
             await self.controller.tracker_agent.log_activity(
                 activity_type='task_execute',
@@ -257,13 +290,13 @@ class TaskManager:
         except Exception as e:
             error_msg = f"Task execution failed: {str(e)}"
             print(f"[TaskManager] {error_msg}")
-            
+
             await self.controller.tracker_agent.log_activity(
                 activity_type='task_execute',
                 details=error_msg,
                 status='error',
                 agent_name='TaskManager'
             )
-            
+
             # Re-raise to let caller handle
             raise
