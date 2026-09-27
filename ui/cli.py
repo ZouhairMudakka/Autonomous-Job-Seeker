@@ -20,13 +20,13 @@ TODO (AI Integration):
 """
 Command Line Interface (MVP)
 
-NOTE (Post-MVP): 
+NOTE (Post-MVP):
 -----------------
-For now, we're using the built-in `cmd` module with `asyncio.run(...)` calls 
-in each command. This approach is sufficient for a small set of commands 
-(start/stop/session info). After the MVP stage, we plan to switch to a more 
-robust async CLI framework (e.g., Typer), which will allow a continuous 
-event loop without calling `asyncio.run` repeatedly, and provide cleaner 
+For now, we're using the built-in `cmd` module with `asyncio.run(...)` calls
+in each command. This approach is sufficient for a small set of commands
+(start/stop/session info). After the MVP stage, we plan to switch to a more
+robust async CLI framework (e.g., Typer), which will allow a continuous
+event loop without calling `asyncio.run` repeatedly, and provide cleaner
 argument parsing, subcommands, and advanced features.
 """
 
@@ -35,7 +35,9 @@ import sys
 import asyncio
 from datetime import datetime
 import shlex
+import inspect
 from utils.telemetry import TelemetryManager
+from utils.console_input import async_input
 
 class CLI(cmd.Cmd):
     intro = 'Welcome to the LinkedIn Automation MVP. Type help or ? to list commands.\n'
@@ -46,6 +48,34 @@ class CLI(cmd.Cmd):
         self.controller = controller
         self.telemetry = TelemetryManager(controller.settings)
         self.logs_manager = controller.logs_manager
+        self._search_task = None
+
+    async def start(self):
+        """Read input off-thread; await commands on the browser's owning loop."""
+        print(self.intro)
+        while True:
+            try:
+                line = await async_input(self.prompt)
+            except EOFError:
+                line = "quit"
+            try:
+                if await self.execute_line(line):
+                    return
+            except Exception as exc:
+                await self.logs_manager.error(f"Command failed: {exc}")
+
+    async def execute_line(self, line):
+        command, args, original = self.parseline(line)
+        if not command:
+            return False
+        handler = getattr(self, "do_" + command, None)
+        result = handler(args) if handler else self.default(original)
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
+
+    async def do_EOF(self, arg):
+        return await self.do_quit(arg)
 
     # -------------------------------------------------------------------------
     # Commands
@@ -70,6 +100,7 @@ class CLI(cmd.Cmd):
         Stop the current automation session.
         """
         try:
+            await self._stop_search()
             await self.logs_manager.info("Stopping current automation session...")
             await self.controller.end_session()
             await self.logs_manager.info("Session ended successfully.")
@@ -84,9 +115,9 @@ class CLI(cmd.Cmd):
         """
         await self.telemetry.track_cli_command('status')
         await self.logs_manager.info("Fetching current automation status...")
-        
+
         try:
-            activities = self.controller.tracker_agent.get_activities()
+            activities = await self.controller.tracker_agent.get_activities()
             if activities.empty:
                 await self.logs_manager.info("No activities recorded yet.")
             else:
@@ -105,21 +136,35 @@ class CLI(cmd.Cmd):
         """
         try:
             parts = shlex.split(arg)
-            if len(parts) < 2:
+            if len(parts) != 2 or not all(part.strip() for part in parts):
                 await self.logs_manager.warning('Usage: search "Job Title" "Location"')
                 return
             job_title = parts[0]
             location = parts[1] if len(parts) > 1 else ""
-            
-            await self.logs_manager.info(f"Starting job search for '{job_title}' in '{location}'...")
-            await self.controller.run_linkedin_flow(job_title, location)
-            await self.logs_manager.info(f"Completed search & apply flow for '{job_title}' in '{location}'.")
-            
+
+            if self._search_task is not None and not self._search_task.done():
+                await self.logs_manager.warning("A search is already running. Stop it before starting another.")
+                return
+            self._search_task = asyncio.create_task(self._run_search(job_title, location))
+
         except ValueError:
             await self.logs_manager.error('Failed to parse arguments. Ensure you use quotes around the title and location.')
         except Exception as e:
             await self.logs_manager.error(f"Error running job search flow: {str(e)}")
             raise
+
+    async def _run_search(self, job_title, location):
+        try:
+            await self.controller.start_session()
+            await self.controller.run_linkedin_flow(job_title, location)
+            await self.logs_manager.info("Search finished; check application records for individual outcomes.")
+        except Exception as exc:
+            await self.logs_manager.error(f"Search failed: {exc}")
+
+    async def _stop_search(self):
+        if self._search_task is not None and not self._search_task.done():
+            self._search_task.cancel()
+            await asyncio.gather(self._search_task, return_exceptions=True)
 
     async def do_pause(self, arg):
         """
@@ -151,6 +196,7 @@ class CLI(cmd.Cmd):
         """
         await self.logs_manager.info("Shutting down CLI...")
         try:
+            await self._stop_search()
             await self.controller.end_session()
             await self.logs_manager.info("Session ended, goodbye!")
             return True
@@ -161,8 +207,7 @@ class CLI(cmd.Cmd):
     async def do_config(self, args):
         """Update preferences."""
         await self.telemetry.track_cli_command('config', {'args': args})
-        await self.logs_manager.info(f"Updating configuration with args: {args}")
-        # ... existing code ...
+        await self.logs_manager.info("Edit .env and restart to change configuration.")
 
     async def default(self, line):
         await self.logs_manager.warning(f"Unknown command: {line}")

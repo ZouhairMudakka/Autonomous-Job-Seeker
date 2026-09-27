@@ -45,18 +45,20 @@ Future Enhancements:
    - Resource usage visualization
 """
 
-import os
-import streamlit as st
+import sys
+import logging
 from pathlib import Path
 import json
 from datetime import datetime
 import pandas as pd
-import plotly.express as px
 from typing import List, Dict, Any
 import asyncio
 
 # Import the universal model and logs manager
-from universal_model import ModelSelector
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from utils.universal_model import ModelSelector
 from storage.logs_manager import LogsManager
 
 class TelemetryViewer:
@@ -64,30 +66,32 @@ class TelemetryViewer:
         self.data_dir = Path('./data/telemetry/events')
         self.metrics_dir = Path('./data/telemetry/metrics')
         self.logs_manager = logs_manager
-        
+
     async def load_events(self, start_date: str = None, end_date: str = None) -> List[Dict]:
         """Load events within date range from local JSON logs."""
         all_events = []
         try:
             if self.logs_manager:
                 await self.logs_manager.info(f"Loading events from {self.data_dir}")
-                
+
             for file in self.data_dir.glob("events_*.json"):
                 date_str = file.stem.split('_')[1]
                 if self._is_date_in_range(date_str, start_date, end_date):
                     try:
-                        with file.open('r') as f:
+                        with file.open('r', encoding='utf-8') as f:
                             file_events = json.load(f)
-                            all_events.extend(file_events)
+                            if not isinstance(file_events, list):
+                                raise ValueError('Event file must contain a list')
+                            all_events.extend(event for event in file_events if isinstance(event, dict))
                         if self.logs_manager:
                             await self.logs_manager.debug(f"Loaded {len(file_events)} events from {file.name}")
                     except Exception as e:
                         if self.logs_manager:
                             await self.logs_manager.error(f"Failed to load events from {file}: {e}")
-                            
+
             if self.logs_manager:
                 await self.logs_manager.info(f"Successfully loaded {len(all_events)} total events")
-                
+
             return all_events
         except Exception as e:
             if self.logs_manager:
@@ -107,37 +111,37 @@ class TelemetryViewer:
                 if file_date > end_date:
                     return False
             return True
-        except ValueError as e:
-            if self.logs_manager:
-                asyncio.create_task(
-                    self.logs_manager.error(f"Invalid date format: {e}")
-                )
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning("Skipping telemetry with an invalid date")
             return False
 
     async def analyze_events(self, events: List[Dict]) -> Dict[str, Any]:
         """Generate analytics from events."""
         if self.logs_manager:
             await self.logs_manager.info(f"Analyzing {len(events)} events")
-            
+
         if not events:
             if self.logs_manager:
                 await self.logs_manager.warning("No events to analyze")
             return {}
-            
+
         try:
             df = pd.DataFrame(events)
-            
+
             analytics = {
                 'total_events': len(events),
-                'success_rate': (df['success'].mean() * 100) if 'success' in df else 0.0,
+                'success_rate': (df['success'].eq(True).mean() * 100) if 'success' in df else 0.0,
                 'event_types': df['event_type'].value_counts().to_dict() if 'event_type' in df else {},
-                'avg_confidence': df['confidence_score'].mean() if 'confidence_score' in df else 0.0,
+                'avg_confidence': pd.to_numeric(df['confidence_score'], errors='coerce').dropna().mean() if 'confidence_score' in df else 0.0,
                 'daily_events': {}
             }
-            
+
+            if pd.isna(analytics['avg_confidence']):
+                analytics['avg_confidence'] = 0.0
+
             # If we have timestamps, group by date
             if 'timestamp' in df:
-                df['date'] = df['timestamp'].apply(lambda x: x[:10])  # first 10 chars => 'YYYY-MM-DD'
+                df['date'] = pd.to_datetime(df['timestamp'], errors='coerce', utc=True).dt.strftime('%Y-%m-%d')  # first 10 chars => 'YYYY-MM-DD'
                 daily_counts = df.groupby('date').size().to_dict()
                 analytics['daily_events'] = daily_counts
 
@@ -146,9 +150,9 @@ class TelemetryViewer:
                     f"Analysis complete: {analytics['total_events']} events, "
                     f"{analytics['success_rate']:.1f}% success rate"
                 )
-            
+
             return analytics
-            
+
         except Exception as e:
             if self.logs_manager:
                 await self.logs_manager.error(f"Error analyzing events: {e}")
@@ -156,6 +160,11 @@ class TelemetryViewer:
 
 
 async def main():
+    try:
+        import streamlit as st
+        import plotly.express as px
+    except ImportError as exc:
+        raise RuntimeError("Install requirements-dashboard.txt to use the telemetry viewer") from exc
     st.title("Telemetry Viewer (with Universal Model)")
 
     # Initialize LogsManager with default settings
@@ -166,7 +175,7 @@ async def main():
         }
     })
     await logs_manager.initialize()
-    
+
     try:
         viewer = TelemetryViewer(logs_manager)
 
@@ -185,7 +194,7 @@ async def main():
         # 1. Load events and analyze
         events = await viewer.load_events(start_str, end_str)
         analytics = await viewer.analyze_events(events)
-        
+
         if not analytics:
             await logs_manager.warning("No data found for selected date range")
             st.warning("No data found for selected date range")
@@ -224,7 +233,7 @@ async def main():
         st.write("Query the telemetry data using a universal model interface.")
 
         # Step A: Instantiate ModelSelector (once)
-        selector = ModelSelector()
+        selector = ModelSelector(logs_manager)
 
         # Step B: Let user pick a model
         all_known_models = (
@@ -251,7 +260,7 @@ async def main():
                     st.warning("Please enter a question.")
                 else:
                     await logs_manager.info(f"Processing GPT analysis request: {user_question[:100]}...")
-                    
+
                     try:
                         # Build a short system prompt describing the analytics
                         system_prompt = f"""
@@ -269,7 +278,7 @@ async def main():
                         # If user picked 0, let universal model handle default. If > 0, pass it in.
                         max_tokens_override = None if user_max_tokens == 0 else user_max_tokens
 
-                        response = selector.chat_completion(
+                        response = await selector.chat_completion(
                             messages=[
                                 {"role": "system", "content": system_prompt},
                                 {"role": "user", "content": user_question}
@@ -277,11 +286,11 @@ async def main():
                             model=chosen_model,  # can be None
                             max_tokens=max_tokens_override
                         )
-                        
+
                         await logs_manager.info("GPT analysis completed successfully")
                         st.write("### GPT Response")
                         st.write(response)
-                        
+
                     except Exception as e:
                         error_msg = f"Error calling model: {e}"
                         await logs_manager.error(error_msg)
@@ -290,7 +299,7 @@ async def main():
     except Exception as e:
         await logs_manager.error(f"Unexpected error in telemetry viewer: {e}")
         st.error(f"An unexpected error occurred: {e}")
-    
+
     finally:
         await logs_manager.shutdown()
 

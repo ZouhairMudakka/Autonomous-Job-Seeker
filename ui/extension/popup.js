@@ -1,9 +1,9 @@
 /**
  * Popup Interface Script
- * 
+ *
  * This script handles the popup UI interactions and communicates with
  * the background script via chrome.runtime.sendMessage.
- * 
+ *
  * It also listens for 'statusUpdate' events from the background script
  * to refresh the UI with the latest automation status.
  */
@@ -13,14 +13,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const pauseBtn = document.getElementById('pauseBtn');
     const stopBtn = document.getElementById('stopBtn');
     const settingsBtn = document.getElementById('settingsBtn');
-    
+
     const statusDiv = document.getElementById('status');
     const runtimeDiv = document.getElementById('runtime');
     const statsDiv = document.getElementById('stats');
 
     // On load, request current status from background
     chrome.runtime.sendMessage({ action: 'getStatus' }, function(response) {
-        if (response && response.status) {
+        if (chrome.runtime.lastError) {
+            statusDiv.textContent = 'Unable to connect to extension background';
+        } else if (response && response.status) {
             updateDetailedStatus(response.status);
         }
     });
@@ -28,7 +30,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // START
     startBtn.addEventListener('click', function() {
         chrome.runtime.sendMessage({ action: 'start' }, function(response) {
-            console.log('Start command sent:', response);
+            showCommandResponse(response);
             // We won't immediately assume success; we'll wait for a statusUpdate
         });
     });
@@ -36,21 +38,31 @@ document.addEventListener('DOMContentLoaded', function() {
     // PAUSE/RESUME
     pauseBtn.addEventListener('click', function() {
         // We'll send 'pause' command; the background script / Python side
-        // can decide if that toggles pause/resume. 
+        // can decide if that toggles pause/resume.
         // Or you can do logic here to track if it's currently paused.
         chrome.runtime.sendMessage({ action: 'pause' }, function(response) {
-            console.log('Pause command sent:', response);
+            showCommandResponse(response);
         });
     });
 
     // STOP
     stopBtn.addEventListener('click', function() {
         chrome.runtime.sendMessage({ action: 'stop' }, function(response) {
-            console.log('Stop command sent:', response);
+            showCommandResponse(response);
         });
     });
 
     // SETTINGS
+    function showCommandResponse(response) {
+        const error = chrome.runtime.lastError;
+        if (error || !response || response.error) {
+            statusDiv.textContent = (error && error.message) || (response && response.error) || 'Command was not sent';
+            statusDiv.style.backgroundColor = '#f8d7da';
+        } else {
+            statusDiv.textContent = 'Command sent; waiting for host status';
+        }
+    }
+
     settingsBtn.addEventListener('click', function() {
         chrome.runtime.openOptionsPage();
     });
@@ -73,7 +85,7 @@ document.addEventListener('DOMContentLoaded', function() {
      * }
      */
     function updateDetailedStatus(status) {
-        console.log('Updating popup with status:', status);
+        if (!status || typeof status !== 'object') return;
 
         // 1) Update primary status text
         statusDiv.textContent = status.status || 'No status';
@@ -98,9 +110,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // 4) Enable/disable buttons
         // If running => start disabled, stop enabled
-        startBtn.disabled = status.is_running;
-        stopBtn.disabled = !status.is_running;
-        pauseBtn.disabled = !status.is_running;
+        startBtn.disabled = !status.connected || status.is_running;
+        stopBtn.disabled = !status.connected || !status.is_running;
+        pauseBtn.disabled = !status.connected || !status.is_running;
 
         // If paused => maybe label the pauseBtn "Resume"
         if (status.is_paused) {
@@ -110,6 +122,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // We might optionally disable the pauseBtn if not running
-        pauseBtn.disabled = !status.is_running;
+        pauseBtn.disabled = !status.connected || !status.is_running;
     }
 });

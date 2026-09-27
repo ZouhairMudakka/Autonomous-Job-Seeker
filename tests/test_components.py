@@ -4,7 +4,7 @@ Tests the functionality of all UI components in the application.
 """
 
 import pytest
-import tkinter as tk
+tk = pytest.importorskip("tkinter")
 from datetime import datetime, timedelta
 from pathlib import Path
 from ui.components import (
@@ -100,7 +100,7 @@ def test_ai_decision_update(ai_decision):
 def test_platform_manager_creation(platform_manager):
     """Test PlatformManagerView initialization."""
     assert platform_manager.winfo_exists()
-    assert len(platform_manager.platforms) == 0
+    assert {'linkedin', 'indeed'} <= set(platform_manager.platforms)
 
 def test_platform_manager_add_platform(platform_manager):
     """Test adding a platform."""
@@ -156,7 +156,7 @@ def test_component_interaction(root):
     job_view = JobProcessingView(root)
     ai_view = AIDecisionView(root)
     platform_view = PlatformManagerView(root)
-    
+
     # Test job processing triggering AI decision
     job = JobCard(
         job_id="test1",
@@ -168,7 +168,7 @@ def test_component_interaction(root):
         details={}
     )
     job_view.update_current_job(job)
-    
+
     decision = AIDecision(
         decision_id="d1",
         confidence_score=job.match_score,
@@ -179,7 +179,7 @@ def test_component_interaction(root):
         metadata={"job_id": job.job_id}
     )
     ai_view.update_decision(decision)
-    
+
     # Verify interaction results
     assert job_view.current_job.job_id == "test1"
-    assert ai_view.current_decision.metadata["job_id"] == "test1" 
+    assert ai_view.current_decision.metadata["job_id"] == "test1"

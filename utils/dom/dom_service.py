@@ -17,20 +17,18 @@ class DomService:
         self.page = page
         self.telemetry = telemetry
         self.logs_manager = logs_manager
-        
+
         self.js_path = os.path.join(
-            os.path.dirname(__file__), 
+            os.path.dirname(__file__),
             "build_dom_tree.js"
         )
-        
-        if self.logs_manager:
-            asyncio.create_task(self.logs_manager.info("Initialized DomService with page and telemetry"))
+
 
     async def _inject_logging_bridge(self):
         """Inject the logging bridge into the page context."""
         if not self.logs_manager:
             return
-            
+
         # Create a bridge function that will call our Python logs_manager
         bridge_script = """
         window.logToPython = (level, message) => {
@@ -39,7 +37,7 @@ class DomService:
         };
         """
         await self.page.evaluate(bridge_script)
-        
+
         # Set up an interval to check for and process logs
         process_logs_script = """
         setInterval(() => {
@@ -50,7 +48,7 @@ class DomService:
             }
         }, 100);
         """
-        
+
         # Expose Python logging function to JavaScript
         async def process_logs(logs):
             for log in logs:
@@ -64,8 +62,12 @@ class DomService:
                     await self.logs_manager.debug(f"[DOM Tree] {message}")
                 else:
                     await self.logs_manager.info(f"[DOM Tree] {message}")
-                    
-        await self.page.expose_function('_processLogs', process_logs)
+
+        if getattr(self.page, '_ajs_dom_logging_bound', False) is not True:
+            await self.page.expose_function('_processLogs', process_logs)
+            self.page._ajs_dom_logging_bound = True
+        await self.page.evaluate("clearInterval(window._domLogInterval)")
+        process_logs_script = process_logs_script.replace("setInterval(", "window._domLogInterval = setInterval(", 1)
         await self.page.evaluate(process_logs_script)
 
     # ===================
@@ -114,10 +116,10 @@ class DomService:
         if self.logs_manager:
             await self.logs_manager.debug(f"Checking presence of element: {selector} (timeout={timeout}s)")
         try:
-            await self.wait_for_selector(selector, timeout=timeout)
+            element = await self.wait_for_selector(selector, timeout=timeout)
             if self.logs_manager:
                 await self.logs_manager.debug(f"Element is present: {selector}")
-            return True
+            return element is not None
         except PlaywrightTimeoutError:
             if self.logs_manager:
                 await self.logs_manager.debug(f"Element is not present: {selector}")
@@ -129,7 +131,7 @@ class DomService:
     async def goto(self, url: str, wait_until: str = "domcontentloaded", timeout: float = None):
         """
         Navigate to URL with specified wait condition.
-        
+
         Args:
             url: The URL to navigate to
             wait_until: Navigation wait condition ('domcontentloaded', 'load', 'networkidle')
@@ -156,22 +158,22 @@ class DomService:
     async def click_element(self, selector: str):
         """
         Click element with given selector.
-        
+
         Args:
             selector: CSS or XPath selector
-            
+
         Raises:
             Exception if element not found or click fails
         """
         if self.logs_manager:
             await self.logs_manager.debug(f"Attempting to click element: {selector}")
-        
+
         element = await self.wait_for_selector(selector)
         if not element:
             if self.logs_manager:
                 await self.logs_manager.error(f"Unable to click. Selector not found: {selector}")
             raise Exception(f"[DomService] Unable to click. Selector not found: {selector}")
-            
+
         try:
             await element.click()
             if self.logs_manager:
@@ -184,7 +186,7 @@ class DomService:
     async def type_text(self, selector: str, text: str, clear_first: bool = True):
         """
         Type text into input field.
-        
+
         Args:
             selector: Input field selector
             text: Text to type
@@ -192,13 +194,13 @@ class DomService:
         """
         if self.logs_manager:
             await self.logs_manager.debug(f"Attempting to type text into element: {selector}")
-            
+
         element = await self.wait_for_selector(selector)
         if not element:
             if self.logs_manager:
                 await self.logs_manager.error(f"Unable to type text. Selector not found: {selector}")
             raise Exception(f"[DomService] Unable to type text. Selector not found: {selector}")
-            
+
         try:
             if clear_first:
                 if self.logs_manager:
@@ -215,55 +217,59 @@ class DomService:
     # ===================
     # Scrolling Methods
     # ===================
-    async def scroll_to_bottom(self, step: int = 200, pause: float = 1.0):
+    async def scroll_to_bottom(self, step: int = 200, pause: float = 1.0, max_steps: int = 100):
         """
         Scroll to page bottom gradually.
-        
+
         Args:
             step: Pixels to scroll each step
             pause: Delay between steps in seconds
         """
         if self.logs_manager:
             await self.logs_manager.debug(f"Starting gradual scroll to bottom (step={step}px, pause={pause}s)")
-            
+
+        if step <= 0 or pause < 0 or max_steps < 1:
+            raise ValueError("step and max_steps must be positive; pause must be nonnegative")
         current_height = await self.page.evaluate("() => document.body.scrollHeight")
         pos = 0
-        while pos < current_height:
+        for _ in range(max_steps):
+            if pos >= current_height:
+                break
             pos += step
             await self.page.mouse.wheel(0, step)
             await self.page.wait_for_timeout(int(pause * 1000))
             new_height = await self.page.evaluate("() => document.body.scrollHeight")
-            
+
             if self.logs_manager:
                 await self.logs_manager.debug(f"Scrolled to position {pos}/{current_height}px")
-                
+
             if new_height > current_height:
                 if self.logs_manager:
                     await self.logs_manager.debug(f"Page height increased from {current_height} to {new_height}px")
                 current_height = new_height
-                
+
         if self.logs_manager:
             await self.logs_manager.debug("Completed scroll to bottom")
 
     async def scroll_to_element(self, selector: str):
         """
         Scroll element into view.
-        
+
         Args:
             selector: Element selector to scroll to
-            
+
         Raises:
             Exception if element not found
         """
         if self.logs_manager:
             await self.logs_manager.debug(f"Attempting to scroll to element: {selector}")
-            
+
         element = await self.wait_for_selector(selector)
         if not element:
             if self.logs_manager:
                 await self.logs_manager.error(f"scroll_to_element: selector not found: {selector}")
             raise Exception(f"[DomService] scroll_to_element: selector not found: {selector}")
-            
+
         try:
             await element.scroll_into_view_if_needed()
             if self.logs_manager:
@@ -280,13 +286,13 @@ class DomService:
         """Take screenshot of specific element."""
         if self.logs_manager:
             await self.logs_manager.debug(f"Attempting to screenshot element: {selector}")
-            
+
         element = await self.query_selector(selector)
         if not element:
             if self.logs_manager:
                 await self.logs_manager.warning(f"Element not found for screenshot: {selector}")
             return None
-            
+
         try:
             screenshot = await element.screenshot(path=path)
             if self.logs_manager:
@@ -337,29 +343,29 @@ class DomService:
         """
         Switch context to iframe.
         Updates self.page to point to iframe content.
-        
+
         Args:
             iframe_selector: Selector for the iframe element
-            
+
         Raises:
             Exception if iframe not found or content frame not accessible
         """
         if self.logs_manager:
             await self.logs_manager.debug(f"Attempting to switch to iframe: {iframe_selector}")
-            
+
         frame_element = await self.wait_for_selector(iframe_selector)
         if not frame_element:
             if self.logs_manager:
                 await self.logs_manager.error(f"Iframe not found: {iframe_selector}")
             raise Exception(f"[DomService] Iframe not found: {iframe_selector}")
-            
+
         try:
             frame = await frame_element.content_frame()
             if not frame:
                 if self.logs_manager:
                     await self.logs_manager.error(f"Could not get content_frame for {iframe_selector}")
                 raise Exception(f"[DomService] Could not get content_frame for {iframe_selector}")
-                
+
             self.page = frame
             if self.logs_manager:
                 await self.logs_manager.info(f"Successfully switched to iframe: {iframe_selector}")
@@ -371,18 +377,11 @@ class DomService:
     def switch_back_to_main_frame(self, main_page: Page):
         """
         Switch back to main page context.
-        
+
         Args:
             main_page: The original Page object to switch back to
         """
-        if self.logs_manager:
-            # Since this is a sync method, we use create_task for the async log call
-            asyncio.create_task(self.logs_manager.info("Switching back to main frame"))
-            
         self.page = main_page
-        
-        if self.logs_manager:
-            asyncio.create_task(self.logs_manager.info("Successfully switched back to main frame"))
 
     # ===================
     # Advanced Interactions
@@ -391,10 +390,10 @@ class DomService:
         """Perform drag and drop operation."""
         if self.logs_manager:
             await self.logs_manager.debug(f"Starting drag and drop operation from {source_selector} to {target_selector}")
-            
+
         source = await self.wait_for_selector(source_selector)
         target = await self.wait_for_selector(target_selector)
-        
+
         if not source or not target:
             if self.logs_manager:
                 await self.logs_manager.error("Source or target element not found for drag and drop")
@@ -404,21 +403,18 @@ class DomService:
             if self.logs_manager:
                 await self.logs_manager.debug(f"Hovering over source element: {source_selector}")
             await source.hover()
-            
+
             if self.logs_manager:
                 await self.logs_manager.debug("Mouse down on source element")
             await self.page.mouse.down()
-            
-            await self.page.wait_for_timeout(int(hold_delay * 1000))
-            
-            if self.logs_manager:
-                await self.logs_manager.debug(f"Hovering over target element: {target_selector}")
-            await target.hover()
-            
-            if self.logs_manager:
-                await self.logs_manager.debug("Mouse up on target element")
-            await self.page.mouse.up()
-            
+            try:
+                await self.page.wait_for_timeout(int(hold_delay * 1000))
+                if self.logs_manager:
+                    await self.logs_manager.debug(f"Hovering over target element: {target_selector}")
+                await target.hover()
+            finally:
+                await self.page.mouse.up()
+
             if self.logs_manager:
                 await self.logs_manager.info("Successfully completed drag and drop operation")
         except Exception as e:
@@ -430,10 +426,10 @@ class DomService:
         """Extract href attributes from elements."""
         if self.logs_manager:
             await self.logs_manager.debug(f"Extracting links from elements matching: {selector}")
-            
+
         elements = await self.query_selector_all(selector)
         links = []
-        
+
         for i, el in enumerate(elements, 1):
             try:
                 href = await el.get_attribute("href")
@@ -444,7 +440,7 @@ class DomService:
             except Exception as e:
                 if self.logs_manager:
                     await self.logs_manager.warning(f"Failed to extract href from element {i}: {str(e)}")
-                
+
         if self.logs_manager:
             await self.logs_manager.info(f"Extracted {len(links)} links from {len(elements)} elements")
         return links
@@ -454,12 +450,14 @@ class DomService:
     # ===================
     async def get_dom_tree(self, highlight: bool = False, max_highlight: int = 75) -> DOMElementNode:
         """Get DOM tree with optional highlighting."""
+        if isinstance(max_highlight, bool) or not isinstance(max_highlight, int) or not 0 <= max_highlight <= 1000:
+            raise ValueError("max_highlight must be an integer from 0 to 1000")
         if self.logs_manager:
             await self.logs_manager.info(f"Building DOM tree (highlight={highlight}, max_highlight={max_highlight})")
-            
+
         # Inject logging bridge if needed
         await self._inject_logging_bridge()
-            
+
         with open(self.js_path, "r", encoding="utf-8") as f:
             js_code = f.read()
 
@@ -474,7 +472,7 @@ class DomService:
             tree_data = await self.page.evaluate(script)
             if self.logs_manager:
                 await self.logs_manager.info("Successfully built DOM tree")
-            return DOMElementNode.from_dict(tree_data)
+            return await DOMElementNode.from_dict(tree_data, self.logs_manager)
         except Exception as e:
             if self.logs_manager:
                 await self.logs_manager.error(f"Failed to build DOM tree: {str(e)}")
@@ -484,11 +482,11 @@ class DomService:
         """Get clickable elements with optional highlighting."""
         if self.logs_manager:
             await self.logs_manager.info("Finding clickable elements in DOM tree")
-            
+
         try:
             dom_tree = await self.get_dom_tree(highlight=highlight, max_highlight=max_highlight)
-            clickable = dom_tree.find_clickable_elements()
-            
+            clickable = await dom_tree.find_clickable_elements()
+
             if self.logs_manager:
                 await self.logs_manager.info(f"Found {len(clickable)} clickable elements")
             return clickable
@@ -501,14 +499,14 @@ class DomService:
         """Refresh element highlights periodically."""
         if self.logs_manager:
             await self.logs_manager.info(f"Starting highlight refresh cycle ({iterations} iterations)")
-            
+
         try:
             for i in range(iterations):
                 if self.logs_manager:
                     await self.logs_manager.debug(f"Refresh iteration {i+1}/{iterations}")
                 await self.get_clickable_elements(highlight=True, max_highlight=75)
                 await self.page.wait_for_timeout(int(interval_sec * 1000))
-                
+
             if self.logs_manager:
                 await self.logs_manager.info("Completed highlight refresh cycle")
         except Exception as e:

@@ -1,180 +1,116 @@
-"""
-Unit Tests for LinkedIn Agent (Async, Playwright-based)
-
-Tests the functionality of the LinkedInAgent class by mocking Playwright calls.
-"""
-
+"""Offline tests for the current Playwright LinkedIn agent contract."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 from agents.linkedin_agent import LinkedInAgent
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from constants import TimingConstants
 
-@pytest.mark.asyncio
 @pytest.fixture
-async def mock_page():
-    """
-    A fixture that returns an AsyncMock simulating a Playwright 'Page'.
-    """
-    page = AsyncMock(spec=Page)
-    return page
+def agent(monkeypatch):
+    for name in ('MODAL_TRANSITION_DELAY', 'EASY_APPLY_MODAL_DELAY', 'PAGE_TRANSITION_DELAY'):
+        monkeypatch.setattr(TimingConstants, name, 0)
+    page = AsyncMock()
+    page.url = 'https://www.linkedin.com/feed/'
+    controller = SimpleNamespace(settings={}, logs_manager=AsyncMock(), tracker_agent=AsyncMock())
+    agent = LinkedInAgent(page, controller, default_timeout=5000, min_delay=0.2, max_delay=0.5)
+    agent._human_delay = AsyncMock()
+    return agent
 
-@pytest.mark.asyncio
-@pytest.fixture
-async def agent(mock_page):
-    """
-    Creates a LinkedInAgent with a mocked Page for testing.
-    """
-    # Minimally, we pass the page. The rest are defaults for timing.
-    ag = LinkedInAgent(
-        page=mock_page,
-        default_timeout=5000,
-        min_delay=0.2,
-        max_delay=0.5
-    )
-    return ag
 
-@pytest.mark.asyncio
-async def test_initialization(agent):
-    """
-    Test that the agent is correctly initialized.
-    """
-    assert agent.page is not None
+def test_initialization(agent):
     assert agent.default_timeout == 5000
     assert agent.min_delay == 0.2
     assert agent.max_delay == 0.5
+    assert agent.dom_service.page is agent.page
+
 
 @pytest.mark.asyncio
 async def test_go_to_jobs_tab_success(agent):
-    """
-    Tests that go_to_jobs_tab clicks the 'Jobs' link if present.
-    """
-    # Mock the wait_for_selector and click calls to simulate a success scenario
-    agent.page.wait_for_selector.return_value = True  # no exception
-    await agent.go_to_jobs_tab()
+    button = AsyncMock()
+    agent.page.query_selector.return_value = button
+    async def click():
+        agent.page.url = 'https://www.linkedin.com/jobs/'
+    button.click.side_effect = click
+    assert await agent.go_to_jobs_tab()
+    button.click.assert_awaited_once()
+    agent.page.goto.assert_not_awaited()
 
-    agent.page.wait_for_selector.assert_awaited_once_with(
-        'a[data-control-name="nav_jobs"]',
-        timeout=agent.default_timeout
-    )
-    agent.page.click.assert_awaited_once_with('a[data-control-name="nav_jobs"]')
 
 @pytest.mark.asyncio
 async def test_go_to_jobs_tab_fallback(agent):
-    """
-    Tests fallback scenario if the direct 'Jobs' link is not found initially.
-    """
-    # First call triggers TimeoutError
-    agent.page.wait_for_selector.side_effect = [PlaywrightTimeoutError("not found"), True]
-    # Then we simulate the fallback magnifier approach
-    agent.page.query_selector.return_value = AsyncMock()  # magnifier found
-    await agent.go_to_jobs_tab()
-
-    # We confirm we called fallback approach
-    # The second wait_for_selector call should succeed
-    assert agent.page.wait_for_selector.call_count == 2
-    assert agent.page.click.call_count == 2  # one for magnifier, one for 'Jobs' link
-
-@pytest.mark.asyncio
-async def test_search_jobs_basic(agent):
-    """
-    Tests a basic job search flow.
-    """
-    await agent.search_jobs("Software Engineer", "Remote")
-    # We expect the agent to fill text fields, press Enter, and wait a bit
-    # Checking page interactions
-    fill_calls = [
-        call.args for call in agent.page.fill.await_args_list
-    ]
-    # Expect two fills: job title, location
-    assert len(fill_calls) == 2
-    assert fill_calls[0] == ('input[aria-label="Search by title, skill, or company"]', 'Software Engineer')
-    assert fill_calls[1] == ('input[aria-label="City, state, or zip code"]', 'Remote')
-
-    # Check we pressed Enter on keyboard
-    agent.page.keyboard.press.assert_awaited_with("Enter")
-
-@pytest.mark.asyncio
-async def test_check_captcha_or_logout_captcha_detected(agent):
-    """
-    If a captcha image is present, we expect an Exception to be raised.
-    """
-    # Mock: we found an element for captcha
-    agent.page.query_selector.return_value = AsyncMock()
-    with pytest.raises(Exception) as excinfo:
-        await agent.check_captcha_or_logout()
-    assert "Captcha encountered" in str(excinfo.value)
-
-@pytest.mark.asyncio
-async def test_check_captcha_or_logout_logged_out(agent):
-    """
-    If sign_in_btn is present, we raise logout exception.
-    """
-    # First call for captcha, second for sign in
-    agent.page.query_selector.side_effect = [None, AsyncMock()]
-    with pytest.raises(Exception) as excinfo:
-        await agent.check_captcha_or_logout()
-    assert "Looks like we got logged out" in str(excinfo.value)
-
-@pytest.mark.asyncio
-async def test_handle_easy_apply(agent):
-    """
-    Ensure handle_easy_apply tries to click the easy apply button, 
-    and calls multi-step logic. We'll patch the multi-step method.
-    """
-    with patch.object(agent, '_multi_step_easy_apply', new_callable=AsyncMock) as mock_multi:
-        mock_multi.return_value = "applied"
-        result = await agent._handle_easy_apply()
-        assert result == "applied"
-        agent.page.click.assert_awaited_once()
-        mock_multi.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_apply_external(agent):
-    """
-    Tests _handle_external_apply. We simulate a new tab popup.
-    """
-    apply_button_mock = AsyncMock()
-    # Suppose new tab is triggered
-    new_page_mock = AsyncMock()
-    agent.page.wait_for_event.return_value = asyncio.Future()
-    agent.page.wait_for_event.return_value.set_result(new_page_mock)
-
-    result = await agent._handle_external_apply(apply_button_mock)
-    assert result == "redirected"
-    apply_button_mock.click.assert_awaited_once()
-    new_page_mock.close.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_handle_missing_elements(agent):
-    """
-    Ensures we attempt a reload when missing elements.
-    """
-    await agent._handle_missing_elements()
-    agent.page.reload.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_safe_get_text(agent):
-    """
-    Test that _safe_get_text returns stripped text or empty string on failures.
-    """
-    # mock a found element
-    mock_elem = AsyncMock()
-    mock_elem.text_content.return_value = "  Some Text\n"
-    agent.page.query_selector.return_value = mock_elem
-    txt = await agent._safe_get_text("test_selector")
-    assert txt == "Some Text"
-
-    # Now no element found
     agent.page.query_selector.return_value = None
-    txt2 = await agent._safe_get_text("test_selector")
-    assert txt2 == ""
+    async def navigate(url, **kwargs):
+        agent.page.url = url
+    agent.page.goto.side_effect = navigate
+    assert await agent.go_to_jobs_tab()
+    agent.page.goto.assert_awaited_once_with('https://www.linkedin.com/jobs/', timeout=30000)
+
 
 @pytest.mark.asyncio
-async def test_human_delay(agent):
-    """
-    We won't verify the actual sleep time, but ensure it doesn't raise errors.
-    """
-    await agent._human_delay()
-    # Possibly check coverage or time, but in unit tests we typically skip.
-    assert True
+async def test_check_captcha_detected(agent):
+    agent._verify_login_state = AsyncMock(return_value=True)
+    agent.page.query_selector.return_value = AsyncMock()
+    with pytest.raises(Exception, match='Captcha encountered'):
+        await agent.check_captcha_or_logout()
+
+
+@pytest.mark.asyncio
+async def test_check_logged_out(agent):
+    agent._verify_login_state = AsyncMock(return_value=False)
+    with pytest.raises(Exception, match='logged out'):
+        await agent.check_captcha_or_logout()
+
+
+@pytest.mark.asyncio
+async def test_easy_apply_uses_form_agent_result(agent):
+    agent.form_filler_agent = AsyncMock()
+    agent.form_filler_agent.fill_easy_apply.return_value = 'failed'
+    assert await agent._handle_easy_apply() == 'failed'
+    agent.form_filler_agent.fill_easy_apply.assert_awaited_once_with({})
+
+
+@pytest.mark.asyncio
+async def test_external_apply_popup_is_closed(agent):
+    popup = AsyncMock()
+    callbacks = {}
+    agent.page.on = MagicMock(side_effect=lambda event, callback: callbacks.update({event: callback}))
+    agent.page.remove_listener = MagicMock()
+    button = AsyncMock()
+    async def click():
+        callbacks['popup'](popup)
+    button.click.side_effect = click
+    assert await agent._handle_external_apply(button) == 'redirected'
+    popup.close.assert_awaited_once()
+    agent.page.remove_listener.assert_called_once()
+    agent.page.go_back.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_external_apply_same_tab_restores_results(agent):
+    agent.page.on = MagicMock()
+    agent.page.remove_listener = MagicMock()
+    button = AsyncMock()
+    async def click():
+        agent.page.url = 'https://jobs.example/application'
+    button.click.side_effect = click
+    assert await agent._handle_external_apply(button) == 'redirected'
+    agent.page.go_back.assert_awaited_once_with(timeout=agent.default_timeout)
+
+
+@pytest.mark.asyncio
+async def test_safe_get_text_supports_card_root(agent):
+    card = AsyncMock()
+    card.query_selector.return_value.text_content.return_value = '  Engineer  '
+    assert await agent._safe_get_text('h3', card) == 'Engineer'
+    agent.page.query_selector.assert_not_awaited()
+    card.query_selector.return_value = None
+    assert await agent._safe_get_text('h3', card) == ''
+
+
+@pytest.mark.asyncio
+async def test_application_delegates_cv_and_answers(agent):
+    agent.settings.update({'cv_path': 'resume.pdf', 'form_data': {'phone': '123'}})
+    agent.form_filler_agent = AsyncMock()
+    agent.form_filler_agent.fill_easy_apply.return_value = 'skipped'
+    assert await agent._multi_step_easy_apply() == 'skipped'
+    agent.form_filler_agent.fill_easy_apply.assert_awaited_once_with({'cv_path': 'resume.pdf', 'phone': '123'})

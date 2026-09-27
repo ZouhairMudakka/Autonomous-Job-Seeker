@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 from typing import Optional
+from storage.privacy import redact_text
 
 # aiologger essentials
 from aiologger.logger import Logger
@@ -38,15 +39,19 @@ class LogsManager:
         # Get data_dir from system settings
         system_settings = settings.get('system', {})
         data_dir = system_settings.get('data_dir', './data')
-        log_level = system_settings.get('log_level', 'INFO').upper()
-        
+        logging_settings = settings.get('logging', {})
+        log_level = logging_settings.get('level', system_settings.get('log_level', 'INFO')).upper()
+        if log_level not in {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}:
+            log_level = 'INFO'
+        self.console_output = logging_settings.get('console_output', True)
+
         # Setup log directory
         self.log_dir = Path(data_dir) / 'logs'
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # For MVP, we allow 'INFO' or 'DEBUG' only
         self.log_level = log_level
-        
+
         # Daily filename approach
         self.log_file = self.log_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
 
@@ -76,15 +81,15 @@ class LogsManager:
 
             # File handler -> daily file
             self.file_handler = AsyncFileHandler(filename=str(self.log_file))
-            
+
             # Add file handler only - console output will be handled separately
             self.logger.add_handler(self.file_handler)
-            
+
             self.is_initialized = True
-            
+
             # Log initialization success to file only
             await self.logger.info("Logging system initialized successfully")
-            
+
         except Exception as e:
             print(f"Failed to initialize logger: {e}")
             raise
@@ -103,12 +108,12 @@ class LogsManager:
                 if self.file_handler:
                     self.logger.remove_handler(self.file_handler)
                     await self.file_handler.close()
-                
+
                 # Then shutdown logger
                 await self.logger.shutdown()
-                
+
             self.is_initialized = False
-            
+
         except Exception as e:
             # Use print since we can't log during shutdown
             print(f"Error during logs cleanup: {e}")
@@ -119,46 +124,56 @@ class LogsManager:
 
     async def info(self, msg: str):
         """Log an INFO-level message."""
+        msg = redact_text(msg)
         # Print to console with timestamp
-        print(f"[INFO] {msg}")
-        
+        if self.console_output and logging.INFO >= logging._nameToLevel[self.log_level]:
+            print(f"[INFO] {msg}")
+
         # Log to file if initialized
         if self.logger:
             await self.logger.info(msg)
 
     async def debug(self, msg: str):
         """Log a DEBUG-level message."""
+        msg = redact_text(msg)
         if self.log_level == "DEBUG":
             # Print debug messages only if in debug mode
-            print(f"[DEBUG] {msg}")
-            
+            if self.console_output:
+                print(f"[DEBUG] {msg}")
+
             # Log to file if initialized
             if self.logger:
                 await self.logger.debug(msg)
 
     async def warning(self, msg: str):
         """Log a WARNING-level message."""
+        msg = redact_text(msg)
         # Print to console with color
-        print(f"{Fore.YELLOW}[WARNING] {msg}{Style.RESET_ALL}")
-        
+        if self.console_output and logging.WARNING >= logging._nameToLevel[self.log_level]:
+            print(f"{Fore.YELLOW}[WARNING] {msg}{Style.RESET_ALL}")
+
         # Log to file if initialized
         if self.logger:
             await self.logger.warning(msg)
 
     async def error(self, msg: str):
         """Log an ERROR-level message."""
+        msg = redact_text(msg)
         # Print to console with color
-        print(f"{Fore.RED}[ERROR] {msg}{Style.RESET_ALL}")
-        
+        if self.console_output and logging.ERROR >= logging._nameToLevel[self.log_level]:
+            print(f"{Fore.RED}[ERROR] {msg}{Style.RESET_ALL}")
+
         # Log to file if initialized
         if self.logger:
             await self.logger.error(msg)
 
     async def critical(self, msg: str):
         """Log a CRITICAL-level message."""
+        msg = redact_text(msg)
         # Print to console with color
-        print(f"{Fore.RED}[CRITICAL] {msg}{Style.RESET_ALL}")
-        
+        if self.console_output:
+            print(f"{Fore.RED}[CRITICAL] {msg}{Style.RESET_ALL}")
+
         # Log to file if initialized
         if self.logger:
             await self.logger.critical(msg)

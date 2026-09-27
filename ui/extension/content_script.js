@@ -1,9 +1,9 @@
 /**
  * Content Script
- * 
+ *
  * Runs in the context of LinkedIn pages to handle direct page interactions
- * and automation tasks. 
- * 
+ * and automation tasks.
+ *
  * In an MVP scenario, it:
  * 1) Listens for messages from background/popup (start, stop, statusUpdate, pageUpdated).
  * 2) Processes LinkedIn pages if isRunning && not isPaused.
@@ -15,7 +15,7 @@ class LinkedInAutomation {
         this.isRunning = false;
         this.isPaused = false;
 
-        // (Optional) Read settings once on initialization 
+        // (Optional) Read settings once on initialization
         // e.g., for autoScan or maxJobs. For MVP, you can skip or enable:
         /*
         chrome.storage.sync.get(['autoScan', 'notifications', 'minMatchScore', 'maxJobs', 'apiEndpoint'], (items) => {
@@ -29,9 +29,10 @@ class LinkedInAutomation {
 
         this.setupMessageListener();
     }
-    
+
     setupMessageListener() {
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+            if (!request || typeof request.action !== 'string') return false;
             switch(request.action) {
                 case 'statusUpdate':
                     this.handleStatusUpdate(request.status);
@@ -53,19 +54,19 @@ class LinkedInAutomation {
                     }
                     break;
             }
-            return true;
+            return false;
         });
     }
-    
+
     start() {
         this.isRunning = true;
         this.isPaused = false;
         console.log('LinkedIn automation started');
-        
+
         // Possibly handle the current page immediately
         this.handlePageUpdate(window.location.href);
     }
-    
+
     stop() {
         this.isRunning = false;
         this.isPaused = false;
@@ -75,42 +76,47 @@ class LinkedInAutomation {
     pauseOrResume() {
         this.isPaused = !this.isPaused;
         console.log(this.isPaused ? 'LinkedIn automation paused' : 'LinkedIn automation resumed');
-        
+
         // If resuming, you may want to immediately process the current page
         if (!this.isPaused && this.isRunning) {
             this.handlePageUpdate(window.location.href);
         }
     }
-    
+
     handlePageUpdate(url) {
         // Basic check for which LinkedIn page we're on:
         if (!url) url = window.location.href;
 
-        if (url.includes('linkedin.com/in/')) {
+        let parsed;
+        try { parsed = new URL(url); } catch (_) { return; }
+        if (parsed.protocol !== 'https:' ||
+            !(parsed.hostname === 'linkedin.com' || parsed.hostname.endsWith('.linkedin.com'))) return;
+        if (parsed.pathname.startsWith('/in/')) {
             this.handleProfilePage();
-        } else if (url.includes('linkedin.com/search/results/people')) {
+        } else if (parsed.pathname.startsWith('/search/results/people')) {
             this.handleSearchPage();
         }
         // Expand with more conditions (job postings, etc.) as needed
     }
-    
+
     handleProfilePage() {
         // Profile page automation logic
         console.log('Processing LinkedIn profile page');
         // e.g., parse user’s name, send to background or do auto-scan
         // if (this.autoScan) { ... }
     }
-    
+
     handleSearchPage() {
         // Search results page automation logic
         console.log('Processing LinkedIn search results page');
         // e.g., list user cards, auto-click certain profiles if autoScan is true
     }
-    
+
     handleStatusUpdate(status) {
+        if (!status || typeof status !== 'object') return;
         // Called when background.js sends a 'statusUpdate' event
-        this.isRunning = status.is_running;
-        this.isPaused = status.is_paused;
+        this.isRunning = status.connected === true && status.is_running === true;
+        this.isPaused = status.is_paused === true;
 
         // If we're running and not paused, we can re-check the page
         if (this.isRunning && !this.isPaused) {

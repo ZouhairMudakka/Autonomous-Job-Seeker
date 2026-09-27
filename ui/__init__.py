@@ -11,6 +11,11 @@ Components:
 """
 
 from .cli import CLI
-from .minimal_gui import MinimalGUI
+
+def __getattr__(name):
+    if name == "MinimalGUI":
+        from .minimal_gui import MinimalGUI
+        return MinimalGUI
+    raise AttributeError(name)
 
 __all__ = ['CLI', 'MinimalGUI']

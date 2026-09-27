@@ -33,6 +33,7 @@ import asyncio
 from typing import Dict, List, Optional
 
 from storage.logs_manager import LogsManager
+from storage.privacy import redact_data
 
 class LearningPipeline:
     """
@@ -49,7 +50,8 @@ class LearningPipeline:
         """
         # Store logs manager reference
         self.logs_manager = logs_manager
-        
+        self.telemetry = getattr(logs_manager, 'telemetry_manager', None)
+
         # Example in-memory structure:
         # {
         #   "click_apply_button": [
@@ -72,7 +74,7 @@ class LearningPipeline:
             context (dict, optional): Additional context about the action (e.g., selectors, page info)
         """
         await self.logs_manager.info(f"Recording outcome for action '{action}' (success={success}, confidence={confidence:.2f})")
-        
+
         if context is None:
             context = {}
 
@@ -80,13 +82,13 @@ class LearningPipeline:
             "timestamp": datetime.datetime.now(),
             "success": success,
             "confidence": confidence,
-            "context": context
+            "context": redact_data(context)
         }
-        
+
         if action not in self.outcomes:
             self.outcomes[action] = []
             await self.logs_manager.debug(f"Created new outcome tracking for action '{action}'")
-            
+
         self.outcomes[action].append(outcome_data)
         await self.logs_manager.debug(f"Stored outcome data for '{action}' (total records: {len(self.outcomes[action])})")
 
@@ -102,16 +104,18 @@ class LearningPipeline:
             float: A success rate between 0.0 and 1.0. If no data is found, returns 0.0.
         """
         await self.logs_manager.debug(f"Calculating success rate for action '{action}' (window={window})")
-        
+
         if action not in self.outcomes or not self.outcomes[action]:
             await self.logs_manager.warning(f"No outcome data found for action '{action}'")
             return 0.0
 
+        if window <= 0:
+            raise ValueError('window must be positive')
         # Get recent outcomes
         recent = self.outcomes[action][-window:]
         successes = sum(1 for record in recent if record["success"])
         success_rate = successes / len(recent)
-        
+
         await self.logs_manager.info(f"Success rate for '{action}': {success_rate:.2%} (based on {len(recent)} records)")
         return success_rate
 
@@ -127,16 +131,18 @@ class LearningPipeline:
             float: Average confidence (0.0 if no data).
         """
         await self.logs_manager.debug(f"Calculating average confidence for action '{action}' (window={window})")
-        
+
         if action not in self.outcomes or not self.outcomes[action]:
             await self.logs_manager.warning(f"No confidence data found for action '{action}'")
             return 0.0
 
+        if window <= 0:
+            raise ValueError('window must be positive')
         # Get recent outcomes
         recent = self.outcomes[action][-window:]
         total_confidence = sum(record["confidence"] for record in recent)
         avg_confidence = total_confidence / len(recent)
-        
+
         await self.logs_manager.info(f"Average confidence for '{action}': {avg_confidence:.2%} (based on {len(recent)} records)")
         return avg_confidence
 
@@ -154,7 +160,7 @@ class LearningPipeline:
         # 2. Adjust confidence thresholds or fallback strategies
         success_rate = await self.get_success_rate(action)
         avg_confidence = await self.get_average_confidence(action)
-        
+
         await self.logs_manager.info(
             f"Current metrics for '{action}': success_rate={success_rate:.2%}, avg_confidence={avg_confidence:.2%}"
         )
@@ -195,23 +201,24 @@ class LearningPipeline:
     async def record_learning_event(self, event_type: str, data: dict) -> None:
         """
         Record a learning event with telemetry and logging.
-        
+
         Args:
             event_type (str): Type of learning event
             data (dict): Event data/context
         """
         await self.logs_manager.info(f"Recording learning event: {event_type}")
-        await self.logs_manager.debug(f"Learning event data: {data}")
-        
+        await self.logs_manager.debug(f"Learning event data: {redact_data(data)}")
+
         try:
-            await self.telemetry.track_event(
-                "learning_pipeline",
-                {"event_type": event_type, "data": data},
-                success=True
-            )
+            if self.telemetry is not None:
+                await self.telemetry.track_event(
+                    "learning_pipeline",
+                    {"event_type": event_type, "data": redact_data(data)},
+                    success=True
+                )
             await self.logs_manager.debug("Successfully recorded learning event with telemetry")
         except Exception as e:
             await self.logs_manager.error(f"Failed to record learning event: {str(e)}")
             raise
 
-# End of learning_pipeline.py 
+# End of learning_pipeline.py

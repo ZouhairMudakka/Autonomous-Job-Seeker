@@ -3,9 +3,9 @@ Basic Tkinter functionality test.
 Verifies that Tkinter windows can be created and displayed properly.
 """
 
-import tkinter as tk
 import threading
 import pytest
+tk = pytest.importorskip("tkinter")
 
 def test_tkinter_basic_window():
     """Test basic Tkinter window creation and functionality."""
@@ -38,4 +38,4 @@ def test_tkinter_basic_window():
     # Clean up
     root.destroy()
     print("[TEST] Window destroyed")
-    print("[TEST] Test completed successfully") 
+    print("[TEST] Test completed successfully")

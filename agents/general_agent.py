@@ -22,16 +22,12 @@ import asyncio
 import random
 import time
 from typing import Any, Optional, List, TYPE_CHECKING
-from playwright.async_api import (
-    Page,
-    TimeoutError as PlaywrightTimeoutError
-)
 from constants import TimingConstants, Messages
 from utils.dom.dom_service import DomService
+from utils.telemetry import TelemetryManager
+from locators.linkedin_locators import LinkedInLocators
 
 if TYPE_CHECKING:
-    from utils.telemetry import TelemetryManager
-    from locators.linkedin_locators import LinkedInLocators
     from storage.logs_manager import LogsManager
 
 
@@ -41,9 +37,9 @@ class GeneralAgent:
         dom_service: 'DomService',
         logs_manager: 'LogsManager',
         default_timeout: float = TimingConstants.DEFAULT_TIMEOUT,
-        min_delay: float = TimingConstants.HUMAN_DELAY_MIN,
-        max_delay: float = TimingConstants.HUMAN_DELAY_MAX,
-        settings: dict = {}
+        min_delay: float = TimingConstants.HUMAN_DELAY_MIN / 1000,
+        max_delay: float = TimingConstants.HUMAN_DELAY_MAX / 1000,
+        settings: Optional[dict] = None
     ):
         """
         Args:
@@ -62,7 +58,7 @@ class GeneralAgent:
         self.min_delay = min_delay
         self.max_delay = max_delay
         self.is_paused = False         # Track pause state
-        self.telemetry = TelemetryManager(settings)
+        self.telemetry = TelemetryManager(settings or {})
 
     # ===================
     # Pause/Resume Methods
@@ -82,7 +78,7 @@ class GeneralAgent:
         if self.is_paused:
             await self.logs_manager.info("[GeneralAgent] Currently paused... waiting.")
             while self.is_paused:
-                await asyncio.sleep(TimingConstants.POLL_INTERVAL)
+                await asyncio.sleep(TimingConstants.POLL_INTERVAL / 1000)
             await self.logs_manager.info("[GeneralAgent] Resumed from pause.")
 
     # ===================
@@ -99,10 +95,11 @@ class GeneralAgent:
                 return await operation(*args, **kwargs)
             except Exception as e:
                 last_exception = e
-                delay = TimingConstants.BASE_RETRY_DELAY * (2 ** attempt)
+                delay = TimingConstants.BASE_RETRY_DELAY / 1000 * (2 ** attempt)
                 await self.logs_manager.warning(f"[GeneralAgent] {Messages.RETRY_MESSAGE.format(attempt+1, TimingConstants.MAX_RETRIES, e)}")
                 await self.logs_manager.info(f"[GeneralAgent] Retrying in {delay} seconds...")
-                await asyncio.sleep(delay)
+                if attempt + 1 < TimingConstants.MAX_RETRIES:
+                    await asyncio.sleep(delay)
         error_msg = f"[GeneralAgent] All retries failed. Last error: {last_exception}"
         await self.logs_manager.error(error_msg)
         raise Exception(error_msg)
@@ -121,8 +118,8 @@ class GeneralAgent:
                     timeout=TimingConstants.MAX_WAIT_TIME
                 )
         except asyncio.TimeoutError:
-            await self.logs_manager.warning(f"[GeneralAgent] Navigation to {url} exceeded {TimingConstants.MAX_WAIT_TIME}ms limit. Proceeding anyway.")
-            return None
+            await self.logs_manager.warning(f"[GeneralAgent] Navigation to {url} exceeded {TimingConstants.MAX_WAIT_TIME}ms limit.")
+            raise
 
     async def _human_delay(self, min_sec: float = None, max_sec: float = None):
         """
@@ -138,7 +135,7 @@ class GeneralAgent:
 
     def _current_time_ms(self) -> int:
         """Helper method to get current time in milliseconds."""
-        return int(time.time() * 1000)
+        return int(time.monotonic() * 1000)
 
     # -------------------------------------------------------------------------
     # Public Methods - Navigation & Basic Interactions
@@ -147,7 +144,7 @@ class GeneralAgent:
         """Navigate to a specific URL with up to MAX_RETRIES attempts."""
         await self._check_if_paused()
         result = await self._retry_operation(self._navigate_operation, url)
-        await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY)
+        await asyncio.sleep(TimingConstants.PAGE_TRANSITION_DELAY / 1000)
         return result
 
     async def click_element(self, selector: str):
@@ -165,14 +162,14 @@ class GeneralAgent:
             # Domain-specific fallback
             try:
                 dom_selector = await LinkedInLocators.get_element(
-                    self.page, 
+                    self.page,
                     selector,
                     dom_fallback=True
                 )
                 if dom_selector:
                     await self.logs_manager.info(f"[GeneralAgent] Using fallback selector: {dom_selector}")
                     await self.dom_service.click_element(dom_selector)
-                    await self.logs_manager.debug(f"[GeneralAgent] Successfully clicked with fallback selector")
+                    await self.logs_manager.debug("[GeneralAgent] Successfully clicked with fallback selector")
                 else:
                     error_msg = f"[GeneralAgent] Both direct click and fallback failed for '{selector}'"
                     await self.logs_manager.error(error_msg)
@@ -194,7 +191,7 @@ class GeneralAgent:
                 await self.logs_manager.error(error_msg)
                 raise Exception(error_msg)
             text = await element.text_content()
-            await asyncio.sleep(TimingConstants.ACTION_DELAY)
+            await asyncio.sleep(TimingConstants.ACTION_DELAY / 1000)
             await self.logs_manager.debug(f"[GeneralAgent] Successfully extracted text from: {selector}")
             return text or ""
         except Exception as e:
@@ -206,19 +203,20 @@ class GeneralAgent:
         """Wait until expected_text is found within element text."""
         await self._check_if_paused()
         use_timeout = min(timeout if timeout is not None else self.default_timeout, TimingConstants.MAX_WAIT_TIME)
-        
+
         await self.logs_manager.debug(f"[GeneralAgent] Waiting for text '{expected_text}' in selector: {selector}")
         end_time = self._current_time_ms() + use_timeout
         while self._current_time_ms() < end_time:
             try:
-                current_text = await self.extract_text(selector)
+                remaining = max(0, end_time - self._current_time_ms()) / 1000
+                current_text = await asyncio.wait_for(self.extract_text(selector), timeout=remaining)
                 if expected_text in current_text:
                     await self.logs_manager.debug(f"[GeneralAgent] Found expected text: '{expected_text}'")
                     return True
-            except:
+            except Exception:
                 pass
             await asyncio.sleep(0.5)
-        
+
         error_msg = f"[GeneralAgent] Timed out waiting for text '{expected_text}' in '{selector}'"
         await self.logs_manager.error(error_msg)
         raise Exception(error_msg)
@@ -237,10 +235,10 @@ class GeneralAgent:
             await self.logs_manager.error(error_msg)
             raise Exception(error_msg)
 
-    async def scroll_to_bottom(self, step: int = 200, pause: float = TimingConstants.INFINITE_SCROLL_DELAY):
+    async def scroll_to_bottom(self, step: int = 200, pause: float = TimingConstants.INFINITE_SCROLL_DELAY / 1000):
         """
         Scroll to the bottom of the page in increments (simulating human scroll).
-        
+
         Args:
             step (int): How many pixels to scroll each step.
             pause (float): Delay in seconds between each scroll step.
@@ -282,7 +280,7 @@ class GeneralAgent:
     async def check_element_present(self, selector: str, timeout: Optional[float] = None) -> bool:
         """
         Check if an element is present (without throwing an exception).
-        
+
         Returns:
             True if element is found within the given timeout, else False.
         """
@@ -390,32 +388,33 @@ class GeneralAgent:
     async def wait_for_condition(self, condition_fn, timeout: Optional[float] = None, poll_interval: float = 0.5) -> bool:
         """
         Wait for a custom condition function to return True.
-        
+
         Args:
             condition_fn: Async function that returns bool
             timeout: Optional custom timeout in ms
             poll_interval: How often to check the condition in seconds
-            
+
         Returns:
             True if condition met within timeout
-            
+
         Raises:
             Exception if condition not met within timeout
         """
         await self._check_if_paused()
         use_timeout = min(timeout if timeout is not None else self.default_timeout, TimingConstants.MAX_WAIT_TIME)
-        
+
         await self.logs_manager.debug("[GeneralAgent] Starting to wait for condition")
         end_time = self._current_time_ms() + use_timeout
         while self._current_time_ms() < end_time:
             try:
-                if await condition_fn():
+                remaining = max(0, end_time - self._current_time_ms()) / 1000
+                if await asyncio.wait_for(condition_fn(), timeout=remaining):
                     await self.logs_manager.debug("[GeneralAgent] Condition met successfully")
                     return True
             except Exception as e:
                 await self.logs_manager.warning(f"[GeneralAgent] Error checking condition: {e}")
             await asyncio.sleep(poll_interval)
-            
+
         error_msg = "[GeneralAgent] Timed out waiting for condition"
         await self.logs_manager.error(error_msg)
         raise Exception(error_msg)

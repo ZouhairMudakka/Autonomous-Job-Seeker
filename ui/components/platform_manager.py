@@ -50,10 +50,11 @@ Thread Safety Note:
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 from typing import Dict, List, Optional, Any, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import logging
 from threading import Lock
+from .ui_dispatch import UIUpdateDispatcher
 
 # Platform-specific constants
 PLATFORM_TYPES = {
@@ -111,7 +112,7 @@ STATUS_INDICATORS = {
 @dataclass
 class PlatformConfig:
     """Data structure for platform configuration information.
-    
+
     Attributes:
         platform_id: Unique identifier for the platform
         name: Display name of the platform
@@ -120,13 +121,15 @@ class PlatformConfig:
     """
     platform_id: str
     name: str
-    credentials: Dict[str, str]
+    credentials: Dict[str, str] = field(repr=False)
     settings: Dict[str, Any]
+    enabled: bool = True
+    last_sync: Optional[datetime] = None
 
 @dataclass
 class PlatformStatus:
     """Data structure for platform status information.
-    
+
     Attributes:
         platform_id: Unique identifier for the platform
         is_connected: Whether the platform is currently connected
@@ -142,18 +145,19 @@ class PlatformStatus:
     error_count: int
     performance_metrics: Dict[str, float]
 
-class PlatformManagerView(ttk.Frame):
+class PlatformManagerView(UIUpdateDispatcher, ttk.Frame):
     """A component for managing multiple job platforms and their configurations."""
-    
+
     def __init__(self, parent, *args, **kwargs):
         """Initialize the PlatformManagerView.
-        
+
         Args:
             parent: The parent widget
             *args: Variable length argument list
             **kwargs: Arbitrary keyword arguments
         """
         super().__init__(parent, *args, **kwargs)
+        self._init_ui_dispatcher()
         self._platforms: Dict[str, PlatformConfig] = {}
         self._status: Dict[str, PlatformStatus] = {}
         self._status_callbacks: List[Callable[[PlatformStatus], None]] = []
@@ -161,16 +165,20 @@ class PlatformManagerView(ttk.Frame):
         self._setup_ui()
         self._setup_bindings()
 
+    @property
+    def platforms(self):
+        return self._platforms.copy()
+
     def _setup_ui(self):
         """Initialize the UI components with improved layout and styling."""
         # Platform Selection Section
         selection_frame = ttk.LabelFrame(self, text="Platform Selection")
         selection_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         # Platform selection with icons
         platform_frame = ttk.Frame(selection_frame)
         platform_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         self.platform_var = tk.StringVar()
         self.platform_combo = ttk.Combobox(
             platform_frame,
@@ -179,7 +187,7 @@ class PlatformManagerView(ttk.Frame):
             width=30
         )
         self.platform_combo.pack(side=tk.LEFT, padx=(0, 5))
-        
+
         # Platform icon display
         self.platform_icon = ttk.Label(
             platform_frame,
@@ -187,89 +195,89 @@ class PlatformManagerView(ttk.Frame):
             font=('TkDefaultFont', 12)
         )
         self.platform_icon.pack(side=tk.LEFT, padx=5)
-        
+
         # Status Section with improved styling
         self.status_frame = ttk.LabelFrame(self, text="Platform Status")
         self.status_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         # Connection status with icon
         self.connection_frame = ttk.Frame(self.status_frame)
         self.connection_frame.pack(fill=tk.X, padx=5, pady=2)
-        
+
         self.status_canvas = tk.Canvas(
             self.connection_frame,
             width=16,
             height=16,
             highlightthickness=0,
-            bg=self.status_frame.cget('background')
+            bg=ttk.Style(self).lookup('TLabelframe', 'background') or '#f0f0f0'
         )
         self.status_canvas.pack(side=tk.LEFT, padx=2)
-        
+
         self.connection_label = ttk.Label(
             self.connection_frame,
             text=STATUS_INDICATORS["disconnected"]["text"]
         )
         self.connection_label.pack(side=tk.LEFT, padx=2)
-        
+
         # Health status with color coding
         self.health_frame = ttk.Frame(self.status_frame)
         self.health_frame.pack(fill=tk.X, padx=5, pady=2)
-        
+
         self.health_icon = ttk.Label(
             self.health_frame,
             text="💚",
             font=('TkDefaultFont', 10)
         )
         self.health_icon.pack(side=tk.LEFT, padx=2)
-        
+
         self.health_label = ttk.Label(
             self.health_frame,
             text="Health: Good",
             foreground=HEALTH_STATUS_COLORS["good"]
         )
         self.health_label.pack(side=tk.LEFT, padx=2)
-        
+
         # Last sync with icon
         self.sync_frame = ttk.Frame(self.status_frame)
         self.sync_frame.pack(fill=tk.X, padx=5, pady=2)
-        
+
         ttk.Label(
             self.sync_frame,
             text="🔄",
             font=('TkDefaultFont', 10)
         ).pack(side=tk.LEFT, padx=2)
-        
+
         self.sync_label = ttk.Label(
             self.sync_frame,
             text="Last Sync: Never"
         )
         self.sync_label.pack(side=tk.LEFT, padx=2)
-        
+
         # Error count with icon
         self.error_frame = ttk.Frame(self.status_frame)
         self.error_frame.pack(fill=tk.X, padx=5, pady=2)
-        
+
         self.error_icon = ttk.Label(
             self.error_frame,
             text="⚠️",
             font=('TkDefaultFont', 10)
         )
         self.error_icon.pack(side=tk.LEFT, padx=2)
-        
+
         self.error_label = ttk.Label(
             self.error_frame,
             text="Errors: 0"
         )
         self.error_label.pack(side=tk.LEFT, padx=2)
-        
+
         # Settings Notebook with platform-specific styling
         self.settings_notebook = ttk.Notebook(self)
         self.settings_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Credentials Tab
         self.credentials_frame = ttk.Frame(self.settings_notebook)
         self.settings_notebook.add(self.credentials_frame, text="Credentials")
-        
+
         # Create scrollable frame for credentials
         self.credentials_canvas = tk.Canvas(self.credentials_frame)
         scrollbar = ttk.Scrollbar(
@@ -278,39 +286,39 @@ class PlatformManagerView(ttk.Frame):
             command=self.credentials_canvas.yview
         )
         self.scrollable_frame = ttk.Frame(self.credentials_canvas)
-        
+
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.credentials_canvas.configure(
                 scrollregion=self.credentials_canvas.bbox("all")
             )
         )
-        
+
         self.credentials_canvas.create_window(
             (0, 0),
             window=self.scrollable_frame,
             anchor="nw"
         )
         self.credentials_canvas.configure(yscrollcommand=scrollbar.set)
-        
+
         self.credentials_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
         # Performance Tab with metrics
         self.performance_frame = ttk.Frame(self.settings_notebook)
         self.settings_notebook.add(self.performance_frame, text="Performance")
-        
+
         # Create performance metrics display
         metrics_frame = ttk.Frame(self.performance_frame)
         metrics_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Add metrics header
         ttk.Label(
             metrics_frame,
             text="Real-time Performance Metrics",
             font=('TkDefaultFont', 10, 'bold')
         ).pack(pady=(0, 10))
-        
+
         # Create metrics display
         self.metrics_text = scrolledtext.ScrolledText(
             metrics_frame,
@@ -320,31 +328,31 @@ class PlatformManagerView(ttk.Frame):
             state=tk.DISABLED
         )
         self.metrics_text.pack(fill=tk.BOTH, expand=True)
-        
+
         # Integration Tab
         self.integration_frame = ttk.Frame(self.settings_notebook)
         self.settings_notebook.add(self.integration_frame, text="Integration")
-        
+
         # Create integration settings
         settings_container = ttk.LabelFrame(
             self.integration_frame,
             text="Integration Settings"
         )
         settings_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Add platform-specific settings
         self.settings_frame = ttk.Frame(settings_container)
         self.settings_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Initialize platforms
         self.initialize_platforms()
 
     def _setup_bindings(self):
         """Set up event bindings for dynamic updates."""
         self.platform_combo.bind("<<ComboboxSelected>>", self._on_platform_selected)
-        
+
         # Bind mouse wheel to credentials scrolling
-        self.credentials_canvas.bind_all(
+        self.credentials_canvas.bind(
             "<MouseWheel>",
             lambda e: self.credentials_canvas.yview_scroll(
                 int(-1*(e.delta/120)), "units"
@@ -353,15 +361,15 @@ class PlatformManagerView(ttk.Frame):
 
     def schedule_ui_update(self, update_func: Callable):
         """Schedule a UI update to run on the main thread.
-        
+
         Args:
             update_func: The function to run on the main thread
         """
-        self.after_idle(update_func)
+        super().schedule_ui_update(update_func)
 
     def add_platform(self, config: PlatformConfig):
         """Add or update a platform configuration.
-        
+
         Args:
             config: The PlatformConfig instance to add/update
         """
@@ -374,40 +382,44 @@ class PlatformManagerView(ttk.Frame):
 
     def update_platform_status(self, status: PlatformStatus):
         """Update the status of a platform.
-        
+
         Args:
             status: The PlatformStatus instance to update
         """
         try:
             with self._update_lock:
                 self._status[status.platform_id] = status
-                self.schedule_ui_update(
-                    lambda: self._update_status_display(status.platform_id)
-                )
-                
-                # Notify callbacks
-                for callback in self._status_callbacks:
-                    try:
-                        callback(status)
-                    except Exception as e:
-                        logging.error(f"Error in status callback: {e}")
+                callbacks = list(self._status_callbacks)
+            self.schedule_ui_update(lambda: self._refresh_selected_platform(status.platform_id))
+            # User callbacks may update platform state again; never hold the lock.
+            for callback in callbacks:
+                try:
+                    callback(status)
+                except Exception as e:
+                    logging.error(f"Error in status callback: {type(e).__name__}")
         except Exception as e:
             logging.error(f"Error updating platform status: {e}")
 
     def register_status_callback(self, callback: Callable[[PlatformStatus], None]):
         """Register a callback for platform status updates.
-        
+
         Args:
             callback: Function to call when platform status changes
         """
-        if callback not in self._status_callbacks:
-            self._status_callbacks.append(callback)
+        with self._update_lock:
+            if callback not in self._status_callbacks:
+                self._status_callbacks.append(callback)
+
+    def _refresh_selected_platform(self, platform_id):
+        if self.get_current_platform() == platform_id:
+            self._update_status_display(platform_id)
+            self._update_performance_display(platform_id)
 
     def _update_platform_list(self):
         """Update the platform selection dropdown."""
         platforms = list(self._platforms.values())
         self.platform_combo['values'] = [p.name for p in platforms]
-        
+
         if platforms and not self.platform_var.get():
             self.platform_var.set(platforms[0].name)
             self._on_platform_selected(None)
@@ -419,7 +431,7 @@ class PlatformManagerView(ttk.Frame):
             (p.platform_id for p in self._platforms.values() if p.name == selected),
             None
         )
-        
+
         if platform_id:
             self._update_settings_display(platform_id)
             self._update_status_display(platform_id)
@@ -427,7 +439,7 @@ class PlatformManagerView(ttk.Frame):
 
     def _update_status_display(self, platform_id: str):
         """Update the status display for the selected platform.
-        
+
         Args:
             platform_id: ID of the platform to display status for
         """
@@ -435,22 +447,22 @@ class PlatformManagerView(ttk.Frame):
         if not status:
             self._clear_status_display()
             return
-        
+
         # Update platform icon
         self.platform_icon.config(text=self.get_platform_icon(platform_id))
-        
+
         # Update connection status with color and icon
         self.status_canvas.delete("all")
         status_info = STATUS_INDICATORS["connected" if status.is_connected else "disconnected"]
-        
+
         self.status_canvas.create_oval(
             2, 2, 14, 14,
             fill=status_info["color"],
             outline="#95A5A6"
         )
-        
+
         self.connection_label.config(text=status_info["text"])
-        
+
         # Update health status with icon
         health_icons = {
             "good": "💚",
@@ -458,22 +470,22 @@ class PlatformManagerView(ttk.Frame):
             "error": "❤️"
         }
         self.health_icon.config(text=health_icons.get(status.health_status, "💔"))
-        
+
         self.health_label.config(
             text=f"Health: {status.health_status.title()}",
-            foreground=HEALTH_STATUS_COLORS[status.health_status]
+            foreground=HEALTH_STATUS_COLORS.get(status.health_status, 'black')
         )
-        
+
         # Update sync status
         self.sync_label.config(
             text=f"Last Sync: {status.last_sync.strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        
+
         # Update error count with warning icon if needed
         self.error_icon.config(
             text="⚠️" if status.error_count > 0 else "✓"
         )
-        
+
         self.error_label.config(
             text=f"Errors: {status.error_count}",
             foreground=HEALTH_STATUS_COLORS["error"] if status.error_count > 0 else "black"
@@ -481,63 +493,63 @@ class PlatformManagerView(ttk.Frame):
 
     def _update_settings_display(self, platform_id: str):
         """Update the settings display for the selected platform.
-        
+
         Args:
             platform_id: ID of the platform to display settings for
         """
         config = self._platforms.get(platform_id)
         if not config:
             return
-        
+
         # Clear existing widgets
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
-        
+
         # Create credential fields
         self.credential_vars = {}  # Store variables for access
         row = 0
-        
+
         for key, value in config.credentials.items():
             # Create label
             ttk.Label(
                 self.scrollable_frame,
                 text=f"{key.replace('_', ' ').title()}:"
             ).grid(row=row, column=0, padx=5, pady=2, sticky="e")
-            
+
             # Create entry with show/hide toggle
             var = tk.StringVar(value=value)
             self.credential_vars[key] = var
-            
+
             entry_frame = ttk.Frame(self.scrollable_frame)
             entry_frame.grid(row=row, column=1, padx=5, pady=2, sticky="ew")
-            
+
             entry = ttk.Entry(
                 entry_frame,
                 textvariable=var,
                 show="*"
             )
             entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            
+
             # Add show/hide toggle button
             def toggle_show(entry=entry, show=[True]):  # Use list for mutable state
                 show[0] = not show[0]
                 entry.config(show="*" if show[0] else "")
-            
+
             ttk.Button(
                 entry_frame,
                 text="👁",
                 width=3,
                 command=toggle_show
             ).pack(side=tk.RIGHT, padx=2)
-            
+
             row += 1
-        
+
         # Configure grid
         self.scrollable_frame.grid_columnconfigure(1, weight=1)
 
     def _update_performance_display(self, platform_id: str):
         """Update the performance metrics display.
-        
+
         Args:
             platform_id: ID of the platform to display metrics for
         """
@@ -548,19 +560,19 @@ class PlatformManagerView(ttk.Frame):
             self.metrics_text.insert('1.0', "No performance data available")
             self.metrics_text.config(state=tk.DISABLED)
             return
-        
+
         self.metrics_text.config(state=tk.NORMAL)
         self.metrics_text.delete('1.0', tk.END)
-        
+
         platform_color = self.get_platform_color(platform_id)
         platform_icon = self.get_platform_icon(platform_id)
-        
+
         # Add header with platform info
         header = f"{platform_icon} {status.platform_id.title()} Performance Metrics\n"
         header += "=" * 40 + "\n\n"
-        
+
         self.metrics_text.insert('1.0', header)
-        
+
         # Add metrics with formatting
         for key, value in status.performance_metrics.items():
             metric_name = key.replace('_', ' ').title()
@@ -570,10 +582,10 @@ class PlatformManagerView(ttk.Frame):
                 formatted_value = f"{value:.2f}s"
             else:
                 formatted_value = f"{value:,.0f}"
-            
+
             metric_line = f"{metric_name}: {formatted_value}\n"
             self.metrics_text.insert('end', metric_line)
-        
+
         self.metrics_text.config(state=tk.DISABLED)
 
     def _clear_status_display(self):
@@ -602,11 +614,12 @@ class PlatformManagerView(ttk.Frame):
         self.platform_combo.set('')
         self.platform_combo['values'] = []
         self._clear_status_display()
-        
+
         # Clear credentials
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
-        
+        self.credential_vars = {}
+
         # Clear performance metrics
         self.metrics_text.config(state=tk.NORMAL)
         self.metrics_text.delete('1.0', tk.END)
@@ -623,7 +636,7 @@ class PlatformManagerView(ttk.Frame):
                     settings=config["default_settings"].copy()
                 )
                 self.add_platform(platform_config)
-                
+
                 # Initialize status
                 platform_status = PlatformStatus(
                     platform_id=config["id"],
@@ -639,7 +652,7 @@ class PlatformManagerView(ttk.Frame):
                     }
                 )
                 self.update_platform_status(platform_status)
-                
+
         except Exception as e:
             logging.error(f"Error initializing platforms: {e}")
 
@@ -720,4 +733,4 @@ class PlatformManagerView(ttk.Frame):
         for platform_type in PLATFORM_TYPES.values():
             if platform_type["id"] == platform_id:
                 return platform_type["color"]
-        return "#9E9E9E"  # Default gray 
+        return "#9E9E9E"  # Default gray

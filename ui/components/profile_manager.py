@@ -42,6 +42,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 from threading import Lock
+from .ui_dispatch import UIUpdateDispatcher
 import os
 
 # Maximum file size for documents (10MB)
@@ -56,7 +57,7 @@ SUPPORTED_FORMATS = {
 @dataclass
 class ProfileVersion:
     """Data structure for profile version information.
-    
+
     Attributes:
         version_id: Unique identifier for the version
         timestamp: When the version was created/modified
@@ -72,37 +73,44 @@ class ProfileVersion:
     skills: List[str]
     metadata: Dict[str, Any]
 
-class ProfileManagerView(ttk.Frame):
+class ProfileManagerView(UIUpdateDispatcher, ttk.Frame):
     """A component for managing job application profiles and versions."""
-    
+
     def __init__(self, parent, *args, **kwargs):
         """Initialize the ProfileManagerView.
-        
+
         Args:
             parent: The parent widget
             *args: Variable length argument list
             **kwargs: Arbitrary keyword arguments
         """
         super().__init__(parent, *args, **kwargs)
+        self._init_ui_dispatcher()
         self._versions: Dict[str, ProfileVersion] = {}
         self._version_order: List[str] = []  # Maintain version order
+        self.current_version: Optional[ProfileVersion] = None
+        self._next_version_number = 1
         self._update_lock = Lock()  # For thread-safe updates
         self._setup_ui()
         self._setup_bindings()
+
+    @property
+    def profile_versions(self):
+        return self._versions.copy()
 
     def _setup_ui(self):
         """Initialize the UI components with improved layout and styling."""
         # Version Management Section
         version_frame = ttk.LabelFrame(self, text="Profile Versions")
         version_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Version List with scrollbar
         list_container = ttk.Frame(version_frame)
         list_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         self.version_scroll = ttk.Scrollbar(list_container)
         self.version_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
         self.version_list = tk.Listbox(
             list_container,
             yscrollcommand=self.version_scroll.set,
@@ -111,31 +119,31 @@ class ProfileManagerView(ttk.Frame):
         )
         self.version_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.version_scroll.config(command=self.version_list.yview)
-        
+
         # Version Control Buttons
         button_frame = ttk.Frame(version_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         ttk.Button(
             button_frame,
             text="New Version",
             command=self._create_new_version
         ).pack(side=tk.LEFT, padx=2)
-        
+
         ttk.Button(
             button_frame,
             text="Delete Version",
             command=self._delete_version
         ).pack(side=tk.LEFT, padx=2)
-        
+
         # Document Management Section
         doc_frame = ttk.LabelFrame(self, text="Documents")
         doc_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         # Resume Selection
         resume_frame = ttk.Frame(doc_frame)
         resume_frame.pack(fill=tk.X, padx=5, pady=2)
-        
+
         ttk.Label(resume_frame, text="Resume:").pack(side=tk.LEFT)
         self.resume_path_var = tk.StringVar()
         ttk.Entry(
@@ -143,17 +151,17 @@ class ProfileManagerView(ttk.Frame):
             textvariable=self.resume_path_var,
             state="readonly"
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        
+
         ttk.Button(
             resume_frame,
             text="Browse",
             command=lambda: self._select_file('resume')
         ).pack(side=tk.RIGHT)
-        
+
         # Cover Letter Selection
         cover_frame = ttk.Frame(doc_frame)
         cover_frame.pack(fill=tk.X, padx=5, pady=2)
-        
+
         ttk.Label(cover_frame, text="Cover Letter:").pack(side=tk.LEFT)
         self.cover_path_var = tk.StringVar()
         ttk.Entry(
@@ -161,24 +169,24 @@ class ProfileManagerView(ttk.Frame):
             textvariable=self.cover_path_var,
             state="readonly"
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        
+
         ttk.Button(
             cover_frame,
             text="Browse",
             command=lambda: self._select_file('cover_letter')
         ).pack(side=tk.RIGHT)
-        
+
         # Skills Management Section
         skills_frame = ttk.LabelFrame(self, text="Skills Matrix")
         skills_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         # Skills List with scrollbar
         skills_container = ttk.Frame(skills_frame)
         skills_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         self.skills_scroll = ttk.Scrollbar(skills_container)
         self.skills_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
         self.skills_list = tk.Listbox(
             skills_container,
             yscrollcommand=self.skills_scroll.set,
@@ -187,26 +195,26 @@ class ProfileManagerView(ttk.Frame):
         )
         self.skills_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.skills_scroll.config(command=self.skills_list.yview)
-        
+
         # Skills Control
         skills_control = ttk.Frame(skills_frame)
         skills_control.pack(fill=tk.X, padx=5, pady=5)
-        
+
         self.skill_entry = ttk.Entry(skills_control)
         self.skill_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-        
+
         ttk.Button(
             skills_control,
             text="Add Skill",
             command=self._add_skill
         ).pack(side=tk.LEFT, padx=2)
-        
+
         ttk.Button(
             skills_control,
             text="Remove Selected",
             command=self._remove_selected_skills
         ).pack(side=tk.LEFT, padx=2)
-        
+
         # Status Bar
         self.status_var = tk.StringVar()
         self.status_bar = ttk.Label(
@@ -224,31 +232,31 @@ class ProfileManagerView(ttk.Frame):
 
     def schedule_ui_update(self, update_func: Callable):
         """Schedule a UI update to run on the main thread.
-        
+
         Args:
             update_func: The function to run on the main thread
         """
-        self.after_idle(update_func)
+        super().schedule_ui_update(update_func)
 
     def _validate_file(self, file_path: str, file_type: str) -> bool:
         """Validate file format and size.
-        
+
         Args:
             file_path: Path to the file to validate
             file_type: Type of file ('resume' or 'cover_letter')
-            
+
         Returns:
             bool: Whether the file is valid
         """
-        if not os.path.exists(file_path):
+        if not os.path.isfile(file_path):
             self._show_status(f"Error: File does not exist: {file_path}")
             return False
-        
+
         # Check file size
         if os.path.getsize(file_path) > MAX_FILE_SIZE:
             self._show_status(f"Error: File size exceeds {MAX_FILE_SIZE/1024/1024:.1f}MB limit")
             return False
-        
+
         # Check file format
         ext = os.path.splitext(file_path)[1].lower()
         if ext not in SUPPORTED_FORMATS[file_type]:
@@ -257,24 +265,24 @@ class ProfileManagerView(ttk.Frame):
                 f"{', '.join(SUPPORTED_FORMATS[file_type])}"
             )
             return False
-        
+
         return True
 
     def _select_file(self, file_type: str):
         """Handle file selection for resume or cover letter.
-        
+
         Args:
             file_type: Type of file to select ('resume' or 'cover_letter')
         """
         formats = SUPPORTED_FORMATS[file_type]
         filetypes = [(f.upper(), f"*{f}") for f in formats]
         filetypes.append(("All Files", "*.*"))
-        
+
         file_path = filedialog.askopenfilename(
             title=f"Select {file_type.replace('_', ' ').title()}",
             filetypes=filetypes
         )
-        
+
         if file_path and self._validate_file(file_path, file_type):
             if file_type == 'resume':
                 self.resume_path_var.set(file_path)
@@ -287,8 +295,9 @@ class ProfileManagerView(ttk.Frame):
         try:
             with self._update_lock:
                 # Generate version ID
-                version_id = f"v{len(self._versions) + 1}"
-                
+                version_id = f"v{self._next_version_number}"
+                self._next_version_number += 1
+
                 # Create new version
                 version = ProfileVersion(
                     version_id=version_id,
@@ -298,9 +307,10 @@ class ProfileManagerView(ttk.Frame):
                     skills=[],
                     metadata={}
                 )
-                
+
                 self._versions[version_id] = version
                 self._version_order.append(version_id)
+                self.current_version = version
                 self.schedule_ui_update(self._update_version_list)
                 self._show_status(f"Created new version: {version_id}")
         except Exception as e:
@@ -313,9 +323,9 @@ class ProfileManagerView(ttk.Frame):
         if not selection:
             self._show_status("Please select a version to delete")
             return
-        
+
         version_id = self._version_order[selection[0]]
-        
+
         if messagebox.askyesno(
             "Confirm Delete",
             f"Are you sure you want to delete version {version_id}?"
@@ -324,6 +334,8 @@ class ProfileManagerView(ttk.Frame):
                 with self._update_lock:
                     del self._versions[version_id]
                     self._version_order.remove(version_id)
+                    if self.current_version and self.current_version.version_id == version_id:
+                        self.current_version = None
                     self.schedule_ui_update(self._update_version_list)
                     self._show_status(f"Deleted version: {version_id}")
             except Exception as e:
@@ -339,21 +351,25 @@ class ProfileManagerView(ttk.Frame):
                 tk.END,
                 f"{version_id} - {version.timestamp.strftime('%Y-%m-%d %H:%M')}"
             )
+        if self.current_version and self.current_version.version_id in self._version_order:
+            self.version_list.selection_set(self._version_order.index(self.current_version.version_id))
 
     def _on_version_selected(self, event):
         """Handle version selection changes."""
         selection = self.version_list.curselection()
         if not selection:
             return
-        
+
         try:
             version_id = self._version_order[selection[0]]
             version = self._versions[version_id]
-            
+
+            self.current_version = version
+
             # Update document paths
             self.resume_path_var.set(str(version.resume_path) if version.resume_path else "")
             self.cover_path_var.set(str(version.cover_letter_path) if version.cover_letter_path else "")
-            
+
             # Update skills list
             self.skills_list.delete(0, tk.END)
             for skill in version.skills:
@@ -367,16 +383,16 @@ class ProfileManagerView(ttk.Frame):
         skill = self.skill_entry.get().strip()
         if not skill:
             return
-        
+
         selection = self.version_list.curselection()
         if not selection:
             self._show_status("Please select a version first")
             return
-        
+
         try:
             version_id = self._version_order[selection[0]]
             version = self._versions[version_id]
-            
+
             if skill not in version.skills:
                 version.skills.append(skill)
                 self.skills_list.insert(tk.END, skill)
@@ -392,22 +408,22 @@ class ProfileManagerView(ttk.Frame):
         if not selection:
             self._show_status("Please select a version first")
             return
-        
+
         skill_selection = self.skills_list.curselection()
         if not skill_selection:
             self._show_status("Please select skills to remove")
             return
-        
+
         try:
             version_id = self._version_order[selection[0]]
             version = self._versions[version_id]
-            
+
             # Remove skills in reverse order to maintain correct indices
             for index in reversed(skill_selection):
                 skill = self.skills_list.get(index)
                 version.skills.remove(skill)
                 self.skills_list.delete(index)
-            
+
             self._show_status("Removed selected skills")
         except Exception as e:
             logging.error(f"Error removing skills: {e}")
@@ -418,19 +434,19 @@ class ProfileManagerView(ttk.Frame):
         selection = self.version_list.curselection()
         if not selection:
             return
-        
+
         try:
             version_id = self._version_order[selection[0]]
             version = self._versions[version_id]
-            
+
             # Update paths
             resume_path = self.resume_path_var.get()
             cover_path = self.cover_path_var.get()
-            
+
             version.resume_path = Path(resume_path) if resume_path else None
             version.cover_letter_path = Path(cover_path) if cover_path else None
             version.timestamp = datetime.now()
-            
+
             self.schedule_ui_update(self._update_version_list)
             self._show_status("Updated version")
         except Exception as e:
@@ -439,7 +455,7 @@ class ProfileManagerView(ttk.Frame):
 
     def _show_status(self, message: str):
         """Update the status bar with a message.
-        
+
         Args:
             message: Status message to display
         """
@@ -453,6 +469,7 @@ class ProfileManagerView(ttk.Frame):
             with self._update_lock:
                 self._versions.clear()
                 self._version_order.clear()
+                self.current_version = None
                 self.schedule_ui_update(self._clear_all_displays)
         except Exception as e:
             logging.error(f"Error clearing profile manager: {e}")
@@ -465,4 +482,4 @@ class ProfileManagerView(ttk.Frame):
         self.resume_path_var.set("")
         self.cover_path_var.set("")
         self.skill_entry.delete(0, tk.END)
-        self._show_status("Cleared all data") 
+        self._show_status("Cleared all data")
