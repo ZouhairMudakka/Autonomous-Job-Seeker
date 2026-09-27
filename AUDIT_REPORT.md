@@ -41,7 +41,7 @@ This is a source and regression audit of the current tree, not a penetration tes
 - Synthetic offline Edge/Playwright checks passed for DOM reconstruction, repeated highlight cleanup, secret filtering, presence detection, and confirmed form submission against local HTML.
 - Complete pinned Python development tree and npm release lockfile: **zero known vulnerabilities** in the final database scan. This is point-in-time evidence, not a guarantee of undiscovered vulnerability absence.
 - High-confidence credential-pattern scan of tracked source files found no matches; full Git history was not scanned.
-- Actual Tk windows, GUI start/CV/close and cancellation, and component assertions ran successfully. Repeated full display runs intermittently failed while Tcl read its installed runtime files (before the relevant application code ran); this environment limitation is preserved rather than reported as a clean full GUI pass. Linux CI runs display tests with Xvfb.
+- Linux GitHub CI passed with Xvfb, including the complete GUI suite, extension tests, static checks, and both dependency audits. Local Windows display runs intermittently failed while Tcl read its installed runtime files; the clean Linux run verifies the application independently of that local runtime issue. [Initial full CI evidence](https://github.com/ZouhairMudakka/Autonomous-Job-Seeker/actions/runs/36321005619).
 
 ## Remaining limits
 
